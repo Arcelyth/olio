@@ -6,13 +6,20 @@ import "core:fmt"
 
 origin_termios: posix.termios
 
+Result :: enum {
+    Err,
+    Ok,
+}
+
 main :: proc() {
-    enable_raw_mode()
     defer disable_raw_mode()
+    if enable_raw_mode() != .Ok {
+        return
+    }
     
-    buffer: [1]byte
     loop: for {
-        if count, err := os.read(os.stdin, buffer[:]); err != nil || count != 1 {
+        buffer: [1]byte
+        if count, err := os.read(os.stdin, buffer[:]); err != nil {
             return
         }
         c := buffer[0]
@@ -23,11 +30,14 @@ main :: proc() {
 }
 
 is_cntl :: proc(b: byte) -> bool {
-    return b < 31 || b == 127
+    return b <= 31 || b == 127
 }
 
-enable_raw_mode :: proc() {
-    posix.tcgetattr(posix.STDIN_FILENO, &origin_termios)
+enable_raw_mode :: proc() -> Result {
+    if posix.tcgetattr(posix.STDIN_FILENO, &origin_termios) != posix.result.OK {
+        fmt.printf("tcgetattr error")
+        return .Err
+    }
     raw := origin_termios
     raw.c_iflag -= {
         posix.CInput_Flag_Bits.BRKINT,
@@ -48,7 +58,14 @@ enable_raw_mode :: proc() {
         posix.CLocal_Flag_Bits.IEXTEN,
         posix.CLocal_Flag_Bits.ISIG,
     }
-    posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &raw)
+    raw.c_cc[posix.Control_Char.VMIN] = 0
+    raw.c_cc[posix.Control_Char.VTIME] = 1
+    if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &raw) != posix.result.OK {
+        fmt.printf("tcsetattr error")
+        return .Err
+    }
+
+    return .Ok
 }
 
 disable_raw_mode :: proc() {
