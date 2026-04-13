@@ -13,31 +13,50 @@ Result :: enum {
 
 main :: proc() {
     defer disable_raw_mode()
-    if enable_raw_mode() != .Ok {
-        return
+    enable_raw_mode()    
+    for {
+        handle_keypress()
     }
-    
-    loop: for {
-        buffer: [1]byte
-        if count, err := os.read(os.stdin, buffer[:]); err != nil {
-            return
-        }
-        c := buffer[0]
-        if c == 'q' do break loop
-        if is_cntl(c) do fmt.printf("%d\r\n", c)
-        else do fmt.printf("%d ('%c')\r\n", c, c)
-    }
+}
+
+die :: proc(msg: string) {
+    disable_raw_mode()
+    fmt.println(msg)
+    os.exit(1)
+}
+
+exit :: proc(code: int) {
+    disable_raw_mode()
+    os.exit(code)
 }
 
 is_cntl :: proc(b: byte) -> bool {
     return b <= 31 || b == 127
 }
 
-enable_raw_mode :: proc() -> Result {
-    if posix.tcgetattr(posix.STDIN_FILENO, &origin_termios) != posix.result.OK {
-        fmt.printf("tcgetattr error")
-        return .Err
+cntl_key :: proc(b: byte) -> byte {
+    return b & 0x1f
+}
+
+read_key :: proc() -> byte {
+    buffer: [1]byte
+    for {
+        nread, err := os.read(os.stdin, buffer[:])
+        if err != nil do die("read byte error")
+        if nread == 1 do break
     }
+    return buffer[0]
+}
+
+handle_keypress :: proc() {
+    switch read_key() {
+    case cntl_key('q'): 
+        exit(0)
+    } 
+}
+
+enable_raw_mode :: proc() {
+    if posix.tcgetattr(posix.STDIN_FILENO, &origin_termios) != posix.result.OK do die("tcgetattr error")
     raw := origin_termios
     raw.c_iflag -= {
         posix.CInput_Flag_Bits.BRKINT,
@@ -60,16 +79,11 @@ enable_raw_mode :: proc() -> Result {
     }
     raw.c_cc[posix.Control_Char.VMIN] = 0
     raw.c_cc[posix.Control_Char.VTIME] = 1
-    if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &raw) != posix.result.OK {
-        fmt.printf("tcsetattr error")
-        return .Err
-    }
-
-    return .Ok
+    if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &raw) != posix.result.OK do die("tcsetattr error")
 }
 
 disable_raw_mode :: proc() {
-    posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &origin_termios)
+    if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &origin_termios) != posix.result.OK do die("tcsetattr error")
 }
 
 
