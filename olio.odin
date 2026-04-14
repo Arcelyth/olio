@@ -6,12 +6,15 @@ import "core:os"
 import "core:fmt"
 import "core:strings"
 import "core:strconv"
+import "core:bytes"
 
-Config :: struct {
+Config :: struct {      // editor's config
     screen_row: int,
     screen_col: int,
     origin_termios: posix.termios
 }
+
+Buffer :: bytes.Buffer  // append buffer
 
 E: Config
 
@@ -70,22 +73,24 @@ handle_keypress :: proc() {
     } 
 }
 
-clear_screen :: proc() {
-    os.write_string(os.stdin, "\x1b[2J")
-    os.write_string(os.stdin, "\x1b[H")
+clear_screen :: proc(buf: ^Buffer) {
+    bytes.buffer_write_string(buf, "\x1b[2J")
+    bytes.buffer_write_string(buf, "\x1b[H")
 }
 
-draw_rows :: proc() {
+draw_rows :: proc(buf: ^Buffer) {
     for r in 0..<E.screen_row {
-        os.write_string(os.stdin, "~")
-        if r < E.screen_row - 1 do os.write_string(os.stdin, "\r\n");
+        bytes.buffer_write_string(buf, "~")
+        if r < E.screen_row - 1 do bytes.buffer_write_string(buf, "\r\n") 
     }
 }
 
 refresh_screen :: proc() {
-    clear_screen()
-    draw_rows()
-    os.write_string(os.stdin, "\x1b[H")
+    buffer: Buffer
+    clear_screen(&buffer)
+    draw_rows(&buffer)
+    bytes.buffer_write_string(&buffer, "\x1b[H")
+    os.write_string(os.stdin, bytes.buffer_to_string(&buffer))
 }
 
 get_cursor_pos :: proc(conf: ^Config) -> Result {
