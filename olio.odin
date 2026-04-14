@@ -1,10 +1,19 @@
 package olio
 
 import "core:sys/posix"
+import "core:c/libc"
 import "core:os"
 import "core:fmt"
+import "core:strings"
+import "core:strconv"
 
-origin_termios: posix.termios
+Config :: struct {
+    screen_row: int,
+    screen_col: int,
+    origin_termios: posix.termios
+}
+
+E: Config
 
 Result :: enum {
     Err,
@@ -14,9 +23,15 @@ Result :: enum {
 main :: proc() {
     defer disable_raw_mode()
     enable_raw_mode()    
+    init_editor()
     for {
+        refresh_screen()
         handle_keypress()
     }
+}
+
+init_editor :: proc() {
+    if get_window_size(&E) == .Err do die("get window size error")
 }
 
 die :: proc(msg: string) {
@@ -55,9 +70,50 @@ handle_keypress :: proc() {
     } 
 }
 
+clear_screen :: proc() {
+    os.write_string(os.stdin, "\x1b[2J")
+    os.write_string(os.stdin, "\x1b[H")
+}
+
+draw_rows :: proc() {
+    for _ in 0..<E.screen_row {
+        os.write_string(os.stdin, "~\r\n")
+    }
+}
+
+refresh_screen :: proc() {
+    clear_screen()
+    draw_rows()
+    os.write_string(os.stdin, "\x1b[H")
+}
+
+get_cursor_pos :: proc(conf: ^Config) -> Result {
+    buf: [32]byte
+    i := 0
+    if _, err := os.write_string(os.stdin, "\x1b[6n"); err != nil do return .Err // report active position
+    fmt.printf("\r\n")
+    for i in 0..<size_of(buf) - 1 {
+        if _, err := os.read(os.stdin, buf[i:i+1]); err != nil do break
+        if buf[i] == 'R' do break
+    }
+    if buf[0] != '\x1b' || buf[1] != '[' do return .Err // parse the response which is a escape sequence
+    res := buf[2:]
+    if ss := strings.split(string(res), ";"); len(ss) == 2 {
+        if res, err := strconv.parse_int(ss[0]); err != false do conf.screen_row = res
+        if res, err := strconv.parse_int(ss[1]); err != false do conf.screen_col = res
+    } 
+
+    return .Ok
+}
+
+get_window_size :: proc(conf: ^Config) -> Result {
+    if _, err := os.write_string(os.stdin, "\x1b[999C\x1b[999B"); err != nil do return .Err
+    return get_cursor_pos(conf)
+}
+
 enable_raw_mode :: proc() {
-    if posix.tcgetattr(posix.STDIN_FILENO, &origin_termios) != posix.result.OK do die("tcgetattr error")
-    raw := origin_termios
+    if posix.tcgetattr(posix.STDIN_FILENO, &E.origin_termios) != posix.result.OK do die("tcgetattr error")
+    raw := E.origin_termios
     raw.c_iflag -= {
         posix.CInput_Flag_Bits.BRKINT,
         posix.CInput_Flag_Bits.ICRNL,
@@ -83,7 +139,7 @@ enable_raw_mode :: proc() {
 }
 
 disable_raw_mode :: proc() {
-    if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &origin_termios) != posix.result.OK do die("tcsetattr error")
+    if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &E.origin_termios) != posix.result.OK do die("tcsetattr error")
 }
 
 
