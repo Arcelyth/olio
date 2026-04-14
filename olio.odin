@@ -9,6 +9,7 @@ import "core:strconv"
 import "core:bytes"
 
 Config :: struct {      // editor's config
+    cx, cy: int,        // cursor's position
     screen_row: int,
     screen_col: int,
     origin_termios: posix.termios
@@ -21,6 +22,18 @@ E: Config
 Result :: enum {
     Err,
     Ok,
+}
+
+Key :: union {
+    byte,
+    Arrow
+}
+
+Arrow :: enum {
+    Arrow_Left = 1000,
+    Arrow_Right,
+    Arrow_Up,
+    Arrow_Down
 }
 
 Olio_Version := "0.0.1"
@@ -36,6 +49,7 @@ main :: proc() {
 }
 
 init_editor :: proc() {
+    E.cx, E.cy = 0, 0
     if get_window_size(&E) == .Err do die("get window size error")
 }
 
@@ -58,20 +72,37 @@ cntl_key :: proc(b: byte) -> byte {
     return b & 0x1f
 }
 
-read_key :: proc() -> byte {
+read_key :: proc() -> Key {
     buffer: [1]byte
     for {
         nread, err := os.read(os.stdin, buffer[:])
         if err != nil do die("read byte error")
         if nread == 1 do break
     }
-    return buffer[0]
+    c := buffer[0]
+    if c == '\x1b' {
+        seq: [3]byte
+        if nread, err := os.read(os.stdin, seq[0:1]); err != nil || nread != 1 do return '\x1b'
+        if nread, err := os.read(os.stdin, seq[1:2]); err != nil || nread != 1 do return '\x1b'
+        if seq[0] == '[' {
+            switch seq[1] {
+            case 'A': return .Arrow_Up
+            case 'B': return .Arrow_Down
+            case 'C': return .Arrow_Right
+            case 'D': return .Arrow_Left
+            }
+        }
+        return '\x1b'
+    } else {
+        return c
+    }
 }
 
 handle_keypress :: proc() {
-    switch read_key() {
-    case cntl_key('q'): 
-        exit(0)
+    c := read_key()
+    switch c {
+    case cntl_key('q'): exit(0)
+    case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
     } 
 }
 
@@ -105,7 +136,8 @@ refresh_screen :: proc() {
     bytes.buffer_write_string(&buffer, "\x1b[?25l")
     bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
-    bytes.buffer_write_string(&buffer, "\x1b[H")
+    pos := fmt.tprintf("\x1b[%d;%dH", E.cy + 1, E.cx + 1)
+    bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
     os.write_string(os.stdin, bytes.buffer_to_string(&buffer))
 }
@@ -133,6 +165,15 @@ get_cursor_pos :: proc(conf: ^Config) -> Result {
 get_window_size :: proc(conf: ^Config) -> Result {
     if _, err := os.write_string(os.stdin, "\x1b[999C\x1b[999B"); err != nil do return .Err
     return get_cursor_pos(conf)
+}
+
+move_cursor :: proc(key: Key) {
+    switch key {
+    case .Arrow_Left: E.cx -= 1
+    case .Arrow_Right: E.cx += 1
+    case .Arrow_Up: E.cy -= 1
+    case .Arrow_Down: E.cy += 1
+    }
 }
 
 enable_raw_mode :: proc() {
