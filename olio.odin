@@ -33,7 +33,9 @@ Arrow :: enum {
     Arrow_Left = 1000,
     Arrow_Right,
     Arrow_Up,
-    Arrow_Down
+    Arrow_Down,
+    Page_Up,
+    Page_Down
 }
 
 Olio_Version := "0.0.1"
@@ -85,11 +87,21 @@ read_key :: proc() -> Key {
         if nread, err := os.read(os.stdin, seq[0:1]); err != nil || nread != 1 do return '\x1b'
         if nread, err := os.read(os.stdin, seq[1:2]); err != nil || nread != 1 do return '\x1b'
         if seq[0] == '[' {
-            switch seq[1] {
-            case 'A': return .Arrow_Up
-            case 'B': return .Arrow_Down
-            case 'C': return .Arrow_Right
-            case 'D': return .Arrow_Left
+            if seq[1] >= '0' && seq[1] <= '9' {
+                if nread, err := os.read(os.stdin, seq[2:3]); err != nil || nread != 1 do return '\x1b'
+                if seq[2] == '~' {
+                    switch seq[1] {
+                    case '5': return .Page_Up
+                    case '6': return .Page_Down
+                    }
+                }
+            } else {
+                switch seq[1] {
+                case 'A': return .Arrow_Up
+                case 'B': return .Arrow_Down
+                case 'C': return .Arrow_Right
+                case 'D': return .Arrow_Left
+                }
             }
         }
         return '\x1b'
@@ -102,6 +114,7 @@ handle_keypress :: proc() {
     c := read_key()
     switch c {
     case cntl_key('q'): exit(0)
+    case .Page_Up, .Page_Down: for _ in 0..<E.screen_row do move_cursor(c == .Page_Up ? .Arrow_Up : .Arrow_Down)
     case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
     } 
 }
@@ -169,10 +182,10 @@ get_window_size :: proc(conf: ^Config) -> Result {
 
 move_cursor :: proc(key: Key) {
     switch key {
-    case .Arrow_Left: E.cx -= 1
-    case .Arrow_Right: E.cx += 1
-    case .Arrow_Up: E.cy -= 1
-    case .Arrow_Down: E.cy += 1
+    case .Arrow_Left: if E.cx != 0 do E.cx -= 1
+    case .Arrow_Right: if E.cx != E.screen_col - 1 do E.cx += 1
+    case .Arrow_Up: if E.cy != 0 do E.cy -= 1
+    case .Arrow_Down: if E.cy != E.screen_row - 1 do E.cy += 1
     }
 }
 
