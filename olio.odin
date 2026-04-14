@@ -76,8 +76,9 @@ clear_screen :: proc() {
 }
 
 draw_rows :: proc() {
-    for _ in 0..<E.screen_row {
-        os.write_string(os.stdin, "~\r\n")
+    for r in 0..<E.screen_row {
+        os.write_string(os.stdin, "~")
+        if r < E.screen_row - 1 do os.write_string(os.stdin, "\r\n");
     }
 }
 
