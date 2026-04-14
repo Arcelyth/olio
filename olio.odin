@@ -35,7 +35,10 @@ Arrow :: enum {
     Arrow_Up,
     Arrow_Down,
     Page_Up,
-    Page_Down
+    Page_Down,
+    Home_Key,
+    End_Key,
+    Del_Key
 }
 
 Olio_Version := "0.0.1"
@@ -91,8 +94,13 @@ read_key :: proc() -> Key {
                 if nread, err := os.read(os.stdin, seq[2:3]); err != nil || nread != 1 do return '\x1b'
                 if seq[2] == '~' {
                     switch seq[1] {
+                    case '1': return .Home_Key
+                    case '3': return .Del_Key
+                    case '4': return .End_Key
                     case '5': return .Page_Up
                     case '6': return .Page_Down
+                    case '7': return .Home_Key
+                    case '8': return .End_Key
                     }
                 }
             } else {
@@ -101,7 +109,14 @@ read_key :: proc() -> Key {
                 case 'B': return .Arrow_Down
                 case 'C': return .Arrow_Right
                 case 'D': return .Arrow_Left
+                case 'H': return .Home_Key
+                case 'F': return .End_Key
                 }
+            }
+        } else if (seq[0] == 'O') {
+            switch seq[1] {
+                case 'H': return .Home_Key
+                case 'F': return .End_Key
             }
         }
         return '\x1b'
@@ -115,6 +130,8 @@ handle_keypress :: proc() {
     switch c {
     case cntl_key('q'): exit(0)
     case .Page_Up, .Page_Down: for _ in 0..<E.screen_row do move_cursor(c == .Page_Up ? .Arrow_Up : .Arrow_Down)
+    case .Home_Key: E.cx = 0
+    case .End_Key: E.cx = E.screen_col - 1
     case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
     } 
 }
