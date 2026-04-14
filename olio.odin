@@ -23,6 +23,8 @@ Result :: enum {
     Ok,
 }
 
+Olio_Version := "0.0.1"
+
 main :: proc() {
     defer disable_raw_mode()
     enable_raw_mode()    
@@ -80,27 +82,43 @@ clear_screen :: proc(buf: ^Buffer) {
 
 draw_rows :: proc(buf: ^Buffer) {
     for r in 0..<E.screen_row {
-        bytes.buffer_write_string(buf, "~")
+        if r == E.screen_row / 3 {
+            wel := fmt.tprintf("Olio editor -- version %s", Olio_Version)
+            if len(wel) > E.screen_col do wel = strings.cut(wel, 0, E.screen_col)
+            padding := (E.screen_col - len(wel)) / 2
+            if padding > 0 {
+                bytes.buffer_write_string(buf, "~")
+                padding -= 1
+            }
+            for _ in 0..<padding do bytes.buffer_write_string(buf, " ") 
+            bytes.buffer_write_string(buf, wel)
+        } else {
+            bytes.buffer_write_string(buf, "~")
+        }
+        bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
         if r < E.screen_row - 1 do bytes.buffer_write_string(buf, "\r\n") 
     }
 }
 
 refresh_screen :: proc() {
     buffer: Buffer
-    clear_screen(&buffer)
+    bytes.buffer_write_string(&buffer, "\x1b[?25l")
+    bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
     bytes.buffer_write_string(&buffer, "\x1b[H")
+    bytes.buffer_write_string(&buffer, "\x1b[?25h")
     os.write_string(os.stdin, bytes.buffer_to_string(&buffer))
 }
 
 get_cursor_pos :: proc(conf: ^Config) -> Result {
-    buf: [32]byte
-    i := 0
+    buf: [dynamic]byte
     if _, err := os.write_string(os.stdin, "\x1b[6n"); err != nil do return .Err // report active position
     fmt.printf("\r\n")
     for i in 0..<size_of(buf) - 1 {
-        if _, err := os.read(os.stdin, buf[i:i+1]); err != nil do break
-        if buf[i] == 'R' do break
+        b: [1]byte
+        if _, err := os.read(os.stdin, b[:]); err != nil do break
+        if b[0] == 'R' do break
+        append(&buf, b[0])
     }
     if buf[0] != '\x1b' || buf[1] != '[' do return .Err // parse the response which is a escape sequence
     res := buf[2:]
