@@ -11,7 +11,9 @@ import "core:bytes"
 
 E_Row :: struct {
     size: int,
+    rsize: int,
     chars: []byte,
+    render: []byte
 }
 
 Config :: struct {      // editor's config
@@ -51,6 +53,7 @@ Arrow :: enum {
 }
 
 Olio_Version := "0.0.1"
+Tab_Stop := 8
 
 main :: proc() {
     defer disable_raw_mode()
@@ -71,8 +74,9 @@ init_editor :: proc() {
 }
 
 append_row :: proc(line: []byte) {
-    e := E_Row { len(line), slice.clone(line)}
+    e := E_Row { len(line), 0, slice.clone(line), make([]byte, 0)}
     append(&E.row, e)
+    editor_update_row(&E.row[E.num_rows])
     E.num_rows = len(E.row)
 }
 
@@ -193,10 +197,10 @@ draw_rows :: proc(buf: ^Buffer) {
                 bytes.buffer_write_string(buf, "~")
             }
         } else {
-            len := E.row[filerow].size - E.coloff
+            len := E.row[filerow].rsize - E.coloff
             if len < 0 do len = 0
             if len > E.screen_col do len = E.screen_col
-            bytes.buffer_write(buf, E.row[filerow].chars[E.coloff:E.coloff+len])
+            bytes.buffer_write(buf, E.row[filerow].render[E.coloff:E.coloff+len])
         }
         bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
         if r < E.screen_row - 1 do bytes.buffer_write_string(buf, "\r\n") 
@@ -241,19 +245,25 @@ get_window_size :: proc(conf: ^Config) -> Result {
 }
 
 move_cursor :: proc(key: Key) {
-    row := E.cy > E.num_rows ? nil : &E.row[E.cy]
     switch key {
     case .Arrow_Left: 
         if E.cx != 0 do E.cx -= 1
-        else if E.cy > 0 do E.cy, E.cx = E.cy-1, E.row[E.cy].size
+        else if E.cy > 0 {  
+            E.cy -= 1
+            E.cx = E.row[E.cy].size
+        }
     case .Arrow_Right: 
-        if row != nil && E.cx < row.size do E.cx += 1
-        else if row != nil && E.cx == row.size do E.cy, E.cx = E.cy + 1, 0
+        if E.cy < E.num_rows {
+            if E.cx < E.row[E.cy].size do E.cx += 1
+            else if E.cx == E.row[E.cy].size {
+                if E.cy < E.num_rows - 1 do E.cy, E.cx = E.cy + 1, 0
+            }
+        }
     case .Arrow_Up: if E.cy != 0 do E.cy -= 1
     case .Arrow_Down: if E.cy < E.num_rows do E.cy += 1
     }
-    row = E.cy > E.num_rows ? nil : &E.row[E.cy]
-    rowlen := row != nil ? row.size : 0
+    rowlen := 0
+    if E.cy < E.num_rows do rowlen = E.row[E.cy].size
     if E.cx > rowlen do E.cx = rowlen
 }
 
@@ -262,6 +272,31 @@ editor_scroll :: proc() {
     if E.cy >= E.rowoff + E.screen_row do E.rowoff = E.cy - E.screen_row + 1
     if E.cx < E.coloff do E.coloff = E.cx
     if E.cx >= E.coloff + E.screen_col do E.coloff = E.cx - E.screen_col + 1
+}
+
+editor_update_row :: proc(row: ^E_Row) {
+    tabs := 0
+    for j in 0..<row.size do if row.chars[j] == '\t' do tabs += 1
+
+    if row.render != nil do delete(row.render)
+    row.render = make([]byte, row.size + tabs*(Tab_Stop - 1))
+
+    idx := 0
+    for j in 0..<row.size {
+        if row.chars[j] == '\t' {
+            row.render[idx] = ' '
+            idx += 1
+            for idx % Tab_Stop != 0 {
+                row.render[idx] = ' '
+                idx += 1
+            }
+        } else {
+            row.render[idx] = row.chars[j]
+            idx += 1
+        }
+    }
+
+    row.rsize = idx
 }
 
 enable_raw_mode :: proc() {
