@@ -8,6 +8,7 @@ import "core:slice"
 import "core:strings"
 import "core:strconv"
 import "core:bytes"
+import "core:builtin"
 
 E_Row :: struct {
     size: int,
@@ -24,7 +25,8 @@ Config :: struct {      // editor's config
     rowoff, coloff: int,    // offset
     num_rows: int,
     row: [dynamic]E_Row,
-    origin_termios: posix.termios
+    origin_termios: posix.termios,
+    filename: string
 }
 
 Buffer :: bytes.Buffer  // append buffer
@@ -71,7 +73,9 @@ main :: proc() {
 
 init_editor :: proc() {
     E.cx, E.cy, E.num_rows, E.rowoff, E.rx = 0, 0, 0, 0, 0
+    E.filename = ""
     if get_window_size(&E) == .Err do die("get window size error")
+    E.screen_row -= 1
 }
 
 append_row :: proc(line: []byte) {
@@ -82,6 +86,7 @@ append_row :: proc(line: []byte) {
 }
 
 editor_open :: proc (path: string) {
+    E.filename = path
     content, ok := os.read_entire_file(path)
     defer delete(content)
     if !ok do die("Failed to read file")
@@ -212,7 +217,7 @@ draw_rows :: proc(buf: ^Buffer) {
             bytes.buffer_write(buf, E.row[filerow].render[E.coloff:E.coloff+len])
         }
         bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
-        if r < E.screen_row - 1 do bytes.buffer_write_string(buf, "\r\n") 
+        bytes.buffer_write_string(buf, "\r\n") 
     }
 }
 
@@ -222,6 +227,7 @@ refresh_screen :: proc() {
     bytes.buffer_write_string(&buffer, "\x1b[?25l")
     bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
+    draw_status_bar(&buffer)
     pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1)
     bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
@@ -316,6 +322,21 @@ row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
         rx += 1
     }
     return rx
+}
+
+draw_status_bar :: proc(buf: ^Buffer) {
+    bytes.buffer_write_string(buf, "\x1b[7m")
+    status := fmt.tprintf("%.20s - %d lines", E.filename != "" ? E.filename : "[No Name]", E.num_rows)
+    rstatus := fmt.tprintf("%d/%d", E.cy + 1, E.num_rows)
+    if len(status) > E.screen_col do status = status[:E.screen_col]
+    bytes.buffer_write_string(buf, status)
+    for i in len(status)..<E.screen_col { 
+        if E.screen_col - i == len(rstatus) {
+            bytes.buffer_write_string(buf, rstatus)
+            break
+        } else do bytes.buffer_write_string(buf, " ")
+    }
+    bytes.buffer_write_string(buf, "\x1b[m")
 }
 
 enable_raw_mode :: proc() {
