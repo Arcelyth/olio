@@ -18,6 +18,7 @@ E_Row :: struct {
 
 Config :: struct {      // editor's config
     cx, cy: int,        // cursor's position
+    rx: int, 
     screen_row: int,
     screen_col: int,
     rowoff, coloff: int,    // offset
@@ -69,7 +70,7 @@ main :: proc() {
 }
 
 init_editor :: proc() {
-    E.cx, E.cy, E.num_rows, E.rowoff = 0, 0, 0, 0
+    E.cx, E.cy, E.num_rows, E.rowoff, E.rx = 0, 0, 0, 0, 0
     if get_window_size(&E) == .Err do die("get window size error")
 }
 
@@ -167,9 +168,17 @@ handle_keypress :: proc() {
     c := read_key()
     switch c {
     case cntl_key('q'): exit(0)
-    case .Page_Up, .Page_Down: for _ in 0..<E.screen_row do move_cursor(c == .Page_Up ? .Arrow_Up : .Arrow_Down)
+    case .Page_Up, .Page_Down: 
+        if c == .Page_Up do E.cy = E.rowoff
+        else if c == .Page_Down {
+            E.cy = E.rowoff + E.screen_row - 1
+            if E.cy > E.num_rows do E.cy = E.num_rows
+        }
+        for _ in 0..<E.screen_row {
+            move_cursor(c == .Page_Up ? .Arrow_Up : .Arrow_Down)
+        }
     case .Home_Key: E.cx = 0
-    case .End_Key: E.cx = E.screen_col - 1
+    case .End_Key: if E.cy < E.num_rows do E.cx = E.row[E.cy].size
     case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
     } 
 }
@@ -213,7 +222,7 @@ refresh_screen :: proc() {
     bytes.buffer_write_string(&buffer, "\x1b[?25l")
     bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
-    pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx - E.coloff + 1)
+    pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1)
     bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
     os.write_string(os.stdin, bytes.buffer_to_string(&buffer))
@@ -268,10 +277,12 @@ move_cursor :: proc(key: Key) {
 }
 
 editor_scroll :: proc() {
+    E.rx = 0
+    if E.cy < E.num_rows do E.rx = row_cx_to_rx(&E.row[E.cy], E.cx)
     if E.cy < E.rowoff do E.rowoff = E.cy
     if E.cy >= E.rowoff + E.screen_row do E.rowoff = E.cy - E.screen_row + 1
-    if E.cx < E.coloff do E.coloff = E.cx
-    if E.cx >= E.coloff + E.screen_col do E.coloff = E.cx - E.screen_col + 1
+    if E.rx < E.coloff do E.coloff = E.rx
+    if E.rx >= E.coloff + E.screen_col do E.coloff = E.rx - E.screen_col + 1
 }
 
 editor_update_row :: proc(row: ^E_Row) {
@@ -295,8 +306,16 @@ editor_update_row :: proc(row: ^E_Row) {
             idx += 1
         }
     }
-
     row.rsize = idx
+}
+
+row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
+    rx := 0
+    for j := 0; j < cx; j += 1 {
+        if row.chars[j] == '\t' do rx += Tab_Stop - 1 - rx % Tab_Stop
+        rx += 1
+    }
+    return rx
 }
 
 enable_raw_mode :: proc() {
