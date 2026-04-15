@@ -4,14 +4,22 @@ import "core:sys/posix"
 import "core:c/libc"
 import "core:os"
 import "core:fmt"
+import "core:slice"
 import "core:strings"
 import "core:strconv"
 import "core:bytes"
+
+E_Row :: struct {
+    size: int,
+    chars: []byte,
+}
 
 Config :: struct {      // editor's config
     cx, cy: int,        // cursor's position
     screen_row: int,
     screen_col: int,
+    num_rows: int,
+    row: [dynamic]E_Row,
     origin_termios: posix.termios
 }
 
@@ -47,6 +55,9 @@ main :: proc() {
     defer disable_raw_mode()
     enable_raw_mode()    
     init_editor()
+    if len(os.args) >= 2 {
+        editor_open(os.args[1])
+    }
     for {
         refresh_screen()
         handle_keypress()
@@ -54,8 +65,30 @@ main :: proc() {
 }
 
 init_editor :: proc() {
-    E.cx, E.cy = 0, 0
+    E.cx, E.cy, E.num_rows = 0, 0, 0
     if get_window_size(&E) == .Err do die("get window size error")
+}
+
+append_row :: proc(line: []byte) {
+    e := E_Row { len(line), slice.clone(line)}
+    append(&E.row, e)
+    E.num_rows = len(E.row)
+}
+
+editor_open :: proc (path: string) {
+    content, ok := os.read_entire_file(path)
+    defer delete(content)
+    if !ok do die("Failed to read file")
+
+    start := 0 
+    for i := 0; i < len(content); i += 1 {
+        if content[i] == '\n' {
+            line := content[start:i]
+            if len(line) > 0 && content[len(line)-1] == '\r' do line = content[:len(line)-1]
+            append_row(line)
+            start = i + 1
+        }
+    } 
 }
 
 die :: proc(msg: string) {
@@ -143,18 +176,24 @@ clear_screen :: proc(buf: ^Buffer) {
 
 draw_rows :: proc(buf: ^Buffer) {
     for r in 0..<E.screen_row {
-        if r == E.screen_row / 3 {
-            wel := fmt.tprintf("Olio editor -- version %s", Olio_Version)
-            if len(wel) > E.screen_col do wel = strings.cut(wel, 0, E.screen_col)
-            padding := (E.screen_col - len(wel)) / 2
-            if padding > 0 {
+        if r >= E.num_rows {
+            if E.num_rows == 0 && r == E.screen_row / 3 {
+                wel := fmt.tprintf("Olio editor -- version %s", Olio_Version)
+                if len(wel) > E.screen_col do wel = strings.cut(wel, 0, E.screen_col)
+                padding := (E.screen_col - len(wel)) / 2
+                if padding > 0 {
+                    bytes.buffer_write_string(buf, "~")
+                    padding -= 1
+                }
+                for _ in 0..<padding do bytes.buffer_write_string(buf, " ") 
+                bytes.buffer_write_string(buf, wel)
+            } else {
                 bytes.buffer_write_string(buf, "~")
-                padding -= 1
             }
-            for _ in 0..<padding do bytes.buffer_write_string(buf, " ") 
-            bytes.buffer_write_string(buf, wel)
         } else {
-            bytes.buffer_write_string(buf, "~")
+            len := E.row[r].size
+            if len > E.screen_col do len = E.screen_col
+            bytes.buffer_write(buf, E.row[r].chars)
         }
         bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
         if r < E.screen_row - 1 do bytes.buffer_write_string(buf, "\r\n") 
