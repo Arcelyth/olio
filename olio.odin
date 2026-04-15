@@ -9,6 +9,7 @@ import "core:strings"
 import "core:strconv"
 import "core:bytes"
 import "core:builtin"
+import "core:time"
 
 E_Row :: struct {
     size: int,
@@ -26,7 +27,9 @@ Config :: struct {      // editor's config
     num_rows: int,
     row: [dynamic]E_Row,
     origin_termios: posix.termios,
-    filename: string
+    filename: string,
+    status_msg: string,
+    status_msg_time: time.Time
 }
 
 Buffer :: bytes.Buffer  // append buffer
@@ -65,6 +68,7 @@ main :: proc() {
     if len(os.args) >= 2 {
         editor_open(os.args[1])
     }
+    set_status_message("HELP: Ctrl-Q = quit")
     for {
         refresh_screen()
         handle_keypress()
@@ -73,9 +77,9 @@ main :: proc() {
 
 init_editor :: proc() {
     E.cx, E.cy, E.num_rows, E.rowoff, E.rx = 0, 0, 0, 0, 0
-    E.filename = ""
+    E.filename, E.status_msg, E.status_msg_time = "", "", time.now()
     if get_window_size(&E) == .Err do die("get window size error")
-    E.screen_row -= 1
+    E.screen_row -= 2
 }
 
 append_row :: proc(line: []byte) {
@@ -228,6 +232,7 @@ refresh_screen :: proc() {
     bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
     draw_status_bar(&buffer)
+    draw_status_message_bar(&buffer)
     pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1)
     bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
@@ -337,6 +342,19 @@ draw_status_bar :: proc(buf: ^Buffer) {
         } else do bytes.buffer_write_string(buf, " ")
     }
     bytes.buffer_write_string(buf, "\x1b[m")
+    bytes.buffer_write_string(buf, "\r\n")
+}
+
+set_status_message :: proc(format: string, args: ..any) {
+    E.status_msg = fmt.tprintf(format, ..args)
+    E.status_msg_time = time.now()
+}
+
+draw_status_message_bar :: proc(buf: ^Buffer) {
+    bytes.buffer_write_string(buf, "\x1b[K")
+    len := len(E.status_msg)
+    if len > E.screen_col do len = E.screen_col
+    if len > 0 && time.since(E.status_msg_time) < 5 * time.Second do bytes.buffer_write_string(buf, E.status_msg)
 }
 
 enable_raw_mode :: proc() {
