@@ -243,11 +243,18 @@ get_window_size :: proc(conf: ^Config) -> Result {
 move_cursor :: proc(key: Key) {
     row := E.cy > E.num_rows ? nil : &E.row[E.cy]
     switch key {
-    case .Arrow_Left: if E.cx != 0 do E.cx -= 1
-    case .Arrow_Right: if row != nil && E.cx < row.size do E.cx += 1
+    case .Arrow_Left: 
+        if E.cx != 0 do E.cx -= 1
+        else if E.cy > 0 do E.cy, E.cx = E.cy-1, E.row[E.cy].size
+    case .Arrow_Right: 
+        if row != nil && E.cx < row.size do E.cx += 1
+        else if row != nil && E.cx == row.size do E.cy, E.cx = E.cy + 1, 0
     case .Arrow_Up: if E.cy != 0 do E.cy -= 1
     case .Arrow_Down: if E.cy < E.num_rows do E.cy += 1
     }
+    row = E.cy > E.num_rows ? nil : &E.row[E.cy]
+    rowlen := row != nil ? row.size : 0
+    if E.cx > rowlen do E.cx = rowlen
 }
 
 editor_scroll :: proc() {
