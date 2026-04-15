@@ -18,6 +18,7 @@ Config :: struct {      // editor's config
     cx, cy: int,        // cursor's position
     screen_row: int,
     screen_col: int,
+    rowoff, coloff: int,    // offset
     num_rows: int,
     row: [dynamic]E_Row,
     origin_termios: posix.termios
@@ -65,7 +66,7 @@ main :: proc() {
 }
 
 init_editor :: proc() {
-    E.cx, E.cy, E.num_rows = 0, 0, 0
+    E.cx, E.cy, E.num_rows, E.rowoff = 0, 0, 0, 0
     if get_window_size(&E) == .Err do die("get window size error")
 }
 
@@ -176,7 +177,8 @@ clear_screen :: proc(buf: ^Buffer) {
 
 draw_rows :: proc(buf: ^Buffer) {
     for r in 0..<E.screen_row {
-        if r >= E.num_rows {
+        filerow := r + E.rowoff
+        if filerow >= E.num_rows {
             if E.num_rows == 0 && r == E.screen_row / 3 {
                 wel := fmt.tprintf("Olio editor -- version %s", Olio_Version)
                 if len(wel) > E.screen_col do wel = strings.cut(wel, 0, E.screen_col)
@@ -191,9 +193,10 @@ draw_rows :: proc(buf: ^Buffer) {
                 bytes.buffer_write_string(buf, "~")
             }
         } else {
-            len := E.row[r].size
+            len := E.row[filerow].size - E.coloff
+            if len < 0 do len = 0
             if len > E.screen_col do len = E.screen_col
-            bytes.buffer_write(buf, E.row[r].chars)
+            bytes.buffer_write(buf, E.row[filerow].chars[E.coloff:E.coloff+len])
         }
         bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
         if r < E.screen_row - 1 do bytes.buffer_write_string(buf, "\r\n") 
@@ -201,11 +204,12 @@ draw_rows :: proc(buf: ^Buffer) {
 }
 
 refresh_screen :: proc() {
+    editor_scroll()
     buffer: Buffer
     bytes.buffer_write_string(&buffer, "\x1b[?25l")
     bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
-    pos := fmt.tprintf("\x1b[%d;%dH", E.cy + 1, E.cx + 1)
+    pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx - E.coloff + 1)
     bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
     os.write_string(os.stdin, bytes.buffer_to_string(&buffer))
@@ -237,12 +241,20 @@ get_window_size :: proc(conf: ^Config) -> Result {
 }
 
 move_cursor :: proc(key: Key) {
+    row := E.cy > E.num_rows ? nil : &E.row[E.cy]
     switch key {
     case .Arrow_Left: if E.cx != 0 do E.cx -= 1
-    case .Arrow_Right: if E.cx != E.screen_col - 1 do E.cx += 1
+    case .Arrow_Right: if row != nil && E.cx < row.size do E.cx += 1
     case .Arrow_Up: if E.cy != 0 do E.cy -= 1
-    case .Arrow_Down: if E.cy != E.screen_row - 1 do E.cy += 1
+    case .Arrow_Down: if E.cy < E.num_rows do E.cy += 1
     }
+}
+
+editor_scroll :: proc() {
+    if E.cy < E.rowoff do E.rowoff = E.cy
+    if E.cy >= E.rowoff + E.screen_row do E.rowoff = E.cy - E.screen_row + 1
+    if E.cx < E.coloff do E.coloff = E.cx
+    if E.cx >= E.coloff + E.screen_col do E.coloff = E.cx - E.screen_col + 1
 }
 
 enable_raw_mode :: proc() {
