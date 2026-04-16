@@ -593,18 +593,39 @@ disable_raw_mode :: proc() {
 /*** find ***/
 
 editor_find :: proc() {
-    query := editor_prompt("Search: %s (ESC to cancel)", find_callback)
+    saved_cx, saved_cy := E.cx, E.cy
+    saved_coloff, saved_rowoff := E.coloff, E.rowoff
+    query := editor_prompt("Search: %s (Use ESC/Arrow/Enter)", find_callback)
     defer delete(query)
+    if query == "" {    // restore values when escape
+        E.cx, E.cy = saved_cx, saved_cy
+        E.coloff, E.rowoff = saved_coloff, saved_rowoff
+    }
 }
 
-find_callback :: proc(query: []byte, key: Key) {
-    if key == '\r' || key == '\x1b' do return 
+last_match := -1
+direction := 1
 
+find_callback :: proc(query: []byte, key: Key) {
+    if key == '\r' || key == '\x1b' {
+        last_match = -1
+        direction = 1
+        return
+    } else if key == .Arrow_Right || key == .Arrow_Down do direction = 1
+    else if key == .Arrow_Left || key == .Arrow_Up do direction = -1
+    else do last_match, direction = -1, 1
+
+    if last_match == -1 do direction = 1
+    current := last_match
     for i in 0..<E.num_rows {
-        row := &E.row[i]
+        current += direction
+        if current == -1 do current = E.num_rows - 1
+        else if current == E.num_rows do current = 0
+        row := &E.row[current]
         idx := strings.index(string(row.render[:]), string(query))
         if idx >= 0 {
-            E.cy = i
+            last_match = current
+            E.cy = current
             E.cx = row_rx_to_cx(row, idx)
             E.rowoff = E.num_rows
             break
