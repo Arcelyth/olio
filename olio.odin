@@ -9,13 +9,13 @@ import "core:strings"
 import "core:strconv"
 import "core:bytes"
 import "core:time"
-import "core:mem"
 
 E_Row :: struct {
     size: int,
     rsize: int,
     chars: [dynamic]byte,
-    render: [dynamic]byte
+    render: [dynamic]byte,
+    hl: [dynamic]Highlight
 }
 
 Config :: struct {      // editor's config
@@ -42,6 +42,12 @@ Result :: enum {
     Ok,
 }
 
+Highlight :: enum {
+    Hl_Normal,
+    Hl_Number,
+    Hl_Match
+}
+
 Key :: union {
     byte,
     Arrow
@@ -61,7 +67,7 @@ Arrow :: enum {
 }
 
 Olio_Version := "0.0.1"
-Tab_Stop := 8
+Tab_Stop := 4
 Quit_Times := 3
 
 main :: proc() {
@@ -87,7 +93,7 @@ init_editor :: proc() {
 }
 
 append_row :: proc(line: []byte) {
-    e := E_Row { len(line), 0, slice.clone_to_dynamic(line), {}}
+    e := E_Row { len(line), 0, slice.clone_to_dynamic(line), {}, {}}
     append(&E.row, e)
     editor_update_row(&E.row[E.num_rows])
     E.num_rows = len(E.row)
@@ -166,6 +172,10 @@ is_cntl :: proc(b: byte) -> bool {
 
 cntl_key :: proc(b: byte) -> byte {
     return b & 0x1f
+}
+
+is_digit :: proc(b: byte) -> bool {
+    return b > '0' && b < '9'
 }
 
 read_key :: proc() -> Key {
@@ -348,8 +358,28 @@ draw_rows :: proc(buf: ^Buffer) {
                 len := E.row[filerow].rsize - E.coloff
                 if len < 0 do len = 0
                 if len > E.screen_col do len = E.screen_col
-                bytes.buffer_write(buf, E.row[filerow].render[E.coloff:E.coloff+len]) 
+                c := E.row[filerow].render[E.coloff:]
+                hl := E.row[filerow].hl[E.coloff:]
+                current_color := -1
+                for j in 0..<len {
+                    if hl[j] == .Hl_Normal {
+                        if current_color != -1 {
+                            bytes.buffer_write_string(buf, "\x1b[39m")
+                            current_color = -1 
+                        }
+                        bytes.buffer_write_byte(buf, c[j])
+                    } else {
+                        color := syntax_to_color(hl[j])
+                        if color != current_color {
+                            current_color = color
+                            color_f := fmt.tprintf("\x1b[%dm", color)
+                            bytes.buffer_write_string(buf, color_f)
+                        }
+                        bytes.buffer_write_byte(buf, c[j])
+                    }
+                }
             }
+            bytes.buffer_write_string(buf, "\x1b[39m")
         }
         bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
         bytes.buffer_write_string(buf, "\r\n") 
@@ -425,6 +455,7 @@ editor_update_row :: proc(row: ^E_Row) {
         }
     }
     row.rsize = idx
+    update_syntax(row)
 }
 
 row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
@@ -480,6 +511,7 @@ draw_status_message_bar :: proc(buf: ^Buffer) {
 free_row :: proc(row: ^E_Row) {
     delete(row.render)
     delete(row.chars)
+    delete(row.hl)
 } 
 
 del_row :: proc(at: int) {
@@ -507,7 +539,7 @@ row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
 
 insert_row :: proc(at: int, s: []byte) {
     if at < 0 || at > E.num_rows do return 
-    new_row := E_Row {len(s), 0, slice.clone_to_dynamic(s), {}}
+    new_row := E_Row {len(s), 0, slice.clone_to_dynamic(s), {}, {}}
     inject_at(&E.row, at, new_row)
     editor_update_row(&E.row[at])
     E.num_rows += 1
@@ -628,8 +660,29 @@ find_callback :: proc(query: []byte, key: Key) {
             E.cy = current
             E.cx = row_rx_to_cx(row, idx)
             E.rowoff = E.num_rows
+            for i in 0..<len(query) {
+                row.hl[idx + i] = .Hl_Match
+            }
             break
         }
     }
 
+}
+
+/*** syntax highlighting ***/
+
+update_syntax :: proc(row: ^E_Row) {
+    resize(&row.hl, row.size)
+    for i in 0..<row.size {
+        if is_digit(row.render[i]) do row.hl[i] = .Hl_Number
+        else do row.hl[i] = .Hl_Normal
+    }
+}
+
+syntax_to_color :: proc(hl: Highlight) -> int {
+    #partial switch hl {
+    case .Hl_Number: return 31
+    case .Hl_Match: return 34
+    case: return 37
+    }
 }
