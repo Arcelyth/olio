@@ -205,6 +205,7 @@ read_key :: proc() -> Key {
         }
         return '\x1b'
     } else {
+        if c == 127 do return .Backspace
         return c
     }
 }
@@ -254,11 +255,13 @@ handle_keypress :: proc() {
         case .End_Key: if E.cy < E.num_rows do E.cx = E.row[E.cy].size
         case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
         case .Backspace, .Del_Key: 
+            if c == .Del_Key do move_cursor(.Arrow_Right)
+            del_char()
         }
     case byte: 
         switch v {
         case '\r': 
-        case cntl_key('h'): 
+        case cntl_key('h'): del_char()
         case cntl_key('s'): editor_save()
         case cntl_key('l'), '\x1b': 
         case cntl_key('q'): {
@@ -438,6 +441,22 @@ insert_char :: proc(c: byte) {
     if E.cy == E.num_rows do append_row([]byte{})
     row_insert_char(&E.row[E.cy], E.cx, c)
     E.cx += 1
+}
+
+del_char :: proc() {
+    if E.cy == E.num_rows do return
+    if E.cx > 0 {
+        row_del_char(&E.row[E.cy], E.cx - 1)
+        E.cx -= 1
+    }
+}
+
+row_del_char :: proc(row: ^E_Row, at: int) {
+    if at < 0 || at > row.size do return 
+    mem.copy(&row.chars[at], &row.chars[at+1], row.size - at) 
+    row.size -= 1
+    editor_update_row(row)
+    E.dirty += 1
 }
 
 enable_raw_mode :: proc() {
