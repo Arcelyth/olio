@@ -71,7 +71,7 @@ main :: proc() {
     if len(os.args) >= 2 {
         editor_open(os.args[1])
     }
-    set_status_message("HELP: Ctrl-S = save | Ctrl-Q = quit")
+    set_status_message("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find")
     for {
         refresh_screen()
         handle_keypress()
@@ -271,6 +271,7 @@ handle_keypress :: proc() {
         case cntl_key('h'): del_char()
         case cntl_key('s'): editor_save()
         case cntl_key('l'), '\x1b': 
+        case cntl_key('f'): editor_find()
         case cntl_key('q'): {
             if E.dirty != 0 && quit_times > 0 {
                 set_status_message("WARNING!!! File has unsaved changes. Press Ctrl-Q %d more times to quit.", quit_times)
@@ -432,6 +433,17 @@ row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
     return rx
 }
 
+row_rx_to_cx :: proc(row: ^E_Row, rx: int) -> int {
+    cur_rx := 0
+    for i in 0..<row.size {
+        if row.chars[i] == '\t' do cur_rx += Tab_Stop - 1 - cur_rx % Tab_Stop
+        cur_rx += 1
+        if cur_rx > rx do return i 
+    }
+    return row.size
+}
+
+
 draw_status_bar :: proc(buf: ^Buffer) {
     bytes.buffer_write_string(buf, "\x1b[7m")
     status := fmt.tprintf("%.20s - %d lines %s", E.filename != "" ? E.filename : "[No Name]", E.num_rows, E.dirty != 0 ? "(modified)" : "")
@@ -575,4 +587,19 @@ disable_raw_mode :: proc() {
     if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &E.origin_termios) != posix.result.OK do die("tcsetattr error")
 }
 
+/*** find ***/
 
+editor_find :: proc() {
+    query := editor_prompt("Search: %s (ESC to cancel)")
+    defer delete(query)
+    for i in 0..<E.num_rows {
+        row := &E.row[i]
+        idx := strings.index(string(row.render[:]), query)
+        if idx >= 0 {
+            E.cy = i
+            E.cx = row_rx_to_cx(row, idx)
+            E.rowoff = E.num_rows
+            break
+        }
+    }
+}
