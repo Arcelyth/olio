@@ -106,7 +106,7 @@ editor_open :: proc (path: string) {
         if content[i] == '\n' {
             line := content[start:i]
             if len(line) > 0 && content[len(line)-1] == '\r' do line = content[:len(line)-1]
-            append_row(line)
+            insert_row(E.num_rows, line)
             start = i + 1
         }
     } 
@@ -261,7 +261,7 @@ handle_keypress :: proc() {
         }
     case byte: 
         switch v {
-        case '\r': 
+        case '\r': insert_newline()
         case cntl_key('h'): del_char()
         case cntl_key('s'): editor_save()
         case cntl_key('l'), '\x1b': 
@@ -458,12 +458,34 @@ row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
     E.dirty += 1
 }
 
+insert_row :: proc(at: int, s: []byte) {
+    if at < 0 || at > E.num_rows do return 
+    new_row := E_Row {len(s), 0, slice.clone_to_dynamic(s), {}}
+    inject_at(&E.row, at, new_row)
+    editor_update_row(&E.row[at])
+    E.num_rows += 1
+    E.dirty += 1
+}
+
 /*** editor operations ***/
 
 insert_char :: proc(c: byte) {
-    if E.cy == E.num_rows do append_row([]byte{})
+    if E.cy == E.num_rows do insert_row(E.num_rows, []byte{})
     row_insert_char(&E.row[E.cy], E.cx, c)
     E.cx += 1
+}
+
+insert_newline :: proc() {
+    if E.cx == 0 do insert_row(E.cy, []byte{})
+    else {
+        row := &E.row[E.cy]
+        insert_row(E.cy + 1, row.chars[E.cx:])
+        row = &E.row[E.cy]
+        row.size = E.cx
+        editor_update_row(row)
+    }
+    E.cy += 1
+    E.cx = 0
 }
 
 del_char :: proc() {
