@@ -25,6 +25,7 @@ Config :: struct {      // editor's config
     screen_col: int,
     rowoff, coloff: int,    // offset
     num_rows: int,
+    dirty: int,         // be modified
     row: [dynamic]E_Row,
     origin_termios: posix.termios,
     filename: string,
@@ -47,6 +48,7 @@ Key :: union {
 }
 
 Arrow :: enum {
+    Backspace = 127,
     Arrow_Left = 1000,
     Arrow_Right,
     Arrow_Up,
@@ -60,6 +62,7 @@ Arrow :: enum {
 
 Olio_Version := "0.0.1"
 Tab_Stop := 8
+Quit_Times := 3
 
 main :: proc() {
     defer disable_raw_mode()
@@ -68,7 +71,7 @@ main :: proc() {
     if len(os.args) >= 2 {
         editor_open(os.args[1])
     }
-    set_status_message("HELP: Ctrl-Q = quit")
+    set_status_message("HELP: Ctrl-S = save | Ctrl-Q = quit")
     for {
         refresh_screen()
         handle_keypress()
@@ -77,6 +80,7 @@ main :: proc() {
 
 init_editor :: proc() {
     E.cx, E.cy, E.num_rows, E.rowoff, E.coloff, E.rx = 0, 0, 0, 0, 0, 0
+    E.dirty = 0
     E.filename, E.status_msg, E.status_msg_time = "", "", time.now()
     if get_window_size(&E) == .Err do die("get window size error")
     E.screen_row -= 2
@@ -87,8 +91,10 @@ append_row :: proc(line: []byte) {
     append(&E.row, e)
     editor_update_row(&E.row[E.num_rows])
     E.num_rows = len(E.row)
+    E.dirty += 1
 }
 
+/*** file IO ***/
 editor_open :: proc (path: string) {
     E.filename = path
     content, ok := os.read_entire_file(path)
@@ -104,6 +110,36 @@ editor_open :: proc (path: string) {
             start = i + 1
         }
     } 
+    E.dirty = 0
+}
+
+rows_to_string :: proc() -> ([]byte, int) {
+    totlen := 0
+    buf : [dynamic]byte
+    for r in E.row {
+        append(&buf, ..r.chars)
+        append(&buf, '\n')
+        totlen += r.size + 1
+    }
+    return buf[:], totlen
+} 
+
+editor_save :: proc() {
+    if E.filename == "" do return
+    buf, len := rows_to_string()
+    fd, err := os.open(E.filename, os.O_RDWR | os.O_CREATE, 0o644)
+    if err != nil {
+        os.close(fd)
+        set_status_message("Can't save! I/O error: %s", err)
+        return 
+    }
+    defer os.close(fd)
+    _, err = os.write(fd, buf)
+    if err != nil do set_status_message("Can't save! I/O error: %s", err)
+    else { 
+        set_status_message("%d bytes written to disk", len)
+        E.dirty = 0
+    }
 }
 
 die :: proc(msg: string) {
@@ -173,11 +209,38 @@ read_key :: proc() -> Key {
     }
 }
 
+/*** input ***/
+
+move_cursor :: proc(key: Key) {
+    switch key {
+    case .Arrow_Left: 
+        if E.cx != 0 do E.cx -= 1
+        else if E.cy > 0 {  
+            E.cy -= 1
+            E.cx = E.row[E.cy].size
+        }
+    case .Arrow_Right: 
+        if E.cy < E.num_rows {
+            if E.cx < E.row[E.cy].size do E.cx += 1
+            else if E.cx == E.row[E.cy].size {
+                if E.cy < E.num_rows - 1 do E.cy, E.cx = E.cy + 1, 0
+            }
+        }
+    case .Arrow_Up: if E.cy != 0 do E.cy -= 1
+    case .Arrow_Down: if E.cy < E.num_rows do E.cy += 1
+    }
+    rowlen := 0
+    if E.cy < E.num_rows do rowlen = E.row[E.cy].size
+    if E.cx > rowlen do E.cx = rowlen
+}
+
+quit_times := Quit_Times
+
 handle_keypress :: proc() {
-    c := read_key()
+    c := read_key() 
     switch v in c {
     case Arrow:
-        #partial switch v {
+        switch v {
         case .Page_Up, .Page_Down: 
             if c == .Page_Up do E.cy = E.rowoff
             else if c == .Page_Down {
@@ -190,13 +253,26 @@ handle_keypress :: proc() {
         case .Home_Key: E.cx = 0
         case .End_Key: if E.cy < E.num_rows do E.cx = E.row[E.cy].size
         case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
+        case .Backspace, .Del_Key: 
         }
     case byte: 
         switch v {
-        case cntl_key('q'): exit(0)
+        case '\r': 
+        case cntl_key('h'): 
+        case cntl_key('s'): editor_save()
+        case cntl_key('l'), '\x1b': 
+        case cntl_key('q'): {
+            if E.dirty != 0 && quit_times > 0 {
+                set_status_message("WARNING!!! File has unsaved changes. Press Ctrl-Q %d more times to quit.", quit_times)
+                quit_times -= 1
+                return 
+            }
+            exit(0)
+        }
         case: insert_char(v)
         }
     } 
+    quit_times = Quit_Times
 }
 
 clear_screen :: proc(buf: ^Buffer) {
@@ -273,29 +349,6 @@ get_window_size :: proc(conf: ^Config) -> Result {
     return get_cursor_pos(conf)
 }
 
-move_cursor :: proc(key: Key) {
-    switch key {
-    case .Arrow_Left: 
-        if E.cx != 0 do E.cx -= 1
-        else if E.cy > 0 {  
-            E.cy -= 1
-            E.cx = E.row[E.cy].size
-        }
-    case .Arrow_Right: 
-        if E.cy < E.num_rows {
-            if E.cx < E.row[E.cy].size do E.cx += 1
-            else if E.cx == E.row[E.cy].size {
-                if E.cy < E.num_rows - 1 do E.cy, E.cx = E.cy + 1, 0
-            }
-        }
-    case .Arrow_Up: if E.cy != 0 do E.cy -= 1
-    case .Arrow_Down: if E.cy < E.num_rows do E.cy += 1
-    }
-    rowlen := 0
-    if E.cy < E.num_rows do rowlen = E.row[E.cy].size
-    if E.cx > rowlen do E.cx = rowlen
-}
-
 editor_scroll :: proc() {
     E.rx = 0
     if E.cy < E.num_rows do E.rx = row_cx_to_rx(&E.row[E.cy], E.cx)
@@ -340,7 +393,7 @@ row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
 
 draw_status_bar :: proc(buf: ^Buffer) {
     bytes.buffer_write_string(buf, "\x1b[7m")
-    status := fmt.tprintf("%.20s - %d lines", E.filename != "" ? E.filename : "[No Name]", E.num_rows)
+    status := fmt.tprintf("%.20s - %d lines %s", E.filename != "" ? E.filename : "[No Name]", E.num_rows, E.dirty != 0 ? "(modified)" : "")
     rstatus := fmt.tprintf("%d/%d", E.cy + 1, E.num_rows)
     if len(status) > E.screen_col do status = status[:E.screen_col]
     bytes.buffer_write_string(buf, status)
@@ -376,6 +429,7 @@ row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
     row.size += 1
     row.chars = new_chars
     editor_update_row(row)
+    E.dirty += 1
 }
 
 /*** editor operations ***/
