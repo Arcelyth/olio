@@ -125,7 +125,13 @@ rows_to_string :: proc() -> ([]byte, int) {
 } 
 
 editor_save :: proc() {
-    if E.filename == "" do return
+    if E.filename == "" {
+        E.filename = editor_prompt("Save as: %s")
+        if E.filename == "" {
+            set_status_message("Save aborted")
+            return 
+        }
+    }
     buf, len := rows_to_string()
     defer delete(buf)
     fd, err := os.open(E.filename, os.O_RDWR | os.O_CREATE | os.O_TRUNC, 0o644)
@@ -279,6 +285,38 @@ handle_keypress :: proc() {
     quit_times = Quit_Times
 }
 
+editor_prompt :: proc(prompt: string) -> string {
+    buf: [dynamic]byte
+    defer delete(buf)
+    for {
+        set_status_message(prompt, string(buf[:]))
+        refresh_screen()
+
+        c := read_key()
+        switch v in c {
+        case Arrow: 
+            if v == .Del_Key || v == .Backspace {
+                if len(buf) > 0 do pop(&buf)
+            }
+        case byte: 
+            if v == cntl_key('h') {
+                if len(buf) > 0 do pop(&buf)
+            }
+            else if v == '\x1b' {
+                set_status_message("")
+                return ""
+            } else if v == '\r' {
+                if len(buf) != 0 {
+                    set_status_message("")
+                    return strings.clone_from_bytes(buf[:])
+                }
+            } else if !is_cntl(v) && v < 128 {
+                append(&buf, v)
+            }
+        } 
+    }
+}
+
 clear_screen :: proc(buf: ^Buffer) {
     bytes.buffer_write_string(buf, "\x1b[2J")
     bytes.buffer_write_string(buf, "\x1b[H")
@@ -341,8 +379,8 @@ get_cursor_pos :: proc(conf: ^Config) -> Result {
     if buf[0] != '\x1b' || buf[1] != '[' do return .Err // parse the response which is a escape sequence
     res := buf[2:]
     if ss := strings.split(string(res), ";"); len(ss) == 2 {
-        if res, err := strconv.parse_int(ss[0]); err != false do conf.screen_row = res
-        if res, err := strconv.parse_int(ss[1]); err != false do conf.screen_col = res
+        if res, ok := strconv.parse_int(ss[0]); ok do conf.screen_row = res
+        if res, ok := strconv.parse_int(ss[1]); ok do conf.screen_col = res
     } 
 
     return .Ok
@@ -366,8 +404,7 @@ editor_update_row :: proc(row: ^E_Row) {
     tabs := 0
     for j in 0..<row.size do if row.chars[j] == '\t' do tabs += 1
 
-    if row.render != nil do clear(&row.render)
-    row.render = make([dynamic]byte, row.size + tabs*(Tab_Stop - 1))
+    resize(&row.render, row.size + tabs*(Tab_Stop - 1))
 
     idx := 0
     for j in 0..<row.size {
@@ -431,7 +468,7 @@ free_row :: proc(row: ^E_Row) {
 } 
 
 del_row :: proc(at: int) {
-    if at < 0 || at > E.num_rows do return
+    if at < 0 || at >= E.num_rows do return
     free_row(&E.row[at])
     ordered_remove(&E.row, at)
     E.num_rows = len(E.row)
@@ -447,13 +484,8 @@ row_append_string :: proc(row: ^E_Row, s: []byte) {
 
 row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
     at := at_ < 0 || at_ > row.size ? row.size : at_
-    new_chars := make([dynamic]byte, row.size + 1)
-    if at > 0 do mem.copy(&new_chars[0], &row.chars[0], at)
-    if at < row.size do mem.copy(&new_chars[at+1], &row.chars[at], row.size - at)
-    if row.chars != nil do delete(row.chars)
-    new_chars[at] = c
-    row.size += 1
-    row.chars = new_chars
+    inject_at(&row.chars, at, c)
+    row.size = len(row.chars)
     editor_update_row(row)
     E.dirty += 1
 }
@@ -481,6 +513,7 @@ insert_newline :: proc() {
         row := &E.row[E.cy]
         insert_row(E.cy + 1, row.chars[E.cx:])
         row = &E.row[E.cy]
+        resize(&row.chars, E.cx)
         row.size = E.cx
         editor_update_row(row)
     }
@@ -504,7 +537,7 @@ del_char :: proc() {
 }
 
 row_del_char :: proc(row: ^E_Row, at: int) {
-    if at < 0 || at > row.size do return 
+    if at < 0 || at >= row.size do return 
     ordered_remove(&row.chars, at)
     row.size = len(row.chars)
     editor_update_row(row)
