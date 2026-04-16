@@ -31,7 +31,8 @@ Config :: struct {      // editor's config
     origin_termios: posix.termios,
     filename: string,
     status_msg: string,
-    status_msg_time: time.Time
+    status_msg_time: time.Time,
+    syntax: ^Syntax
 }
 
 Buffer :: bytes.Buffer  // append buffer
@@ -67,6 +68,25 @@ Arrow :: enum {
     Del_Key
 }
 
+Syntax_Flag :: enum {
+    Hl_Highlight_Numbers
+}
+
+Syntax :: struct {
+    filetype: string,
+    filematch: []string,
+    flags: bit_set[Syntax_Flag; u32]
+}
+
+C_Hl_Extensions := []string {".c", ".h", ".cpp"}
+Hl_Db := []Syntax {
+    Syntax {
+        "c", 
+        C_Hl_Extensions,
+        {.Hl_Highlight_Numbers}
+    },
+}
+
 Olio_Version := "0.0.1"
 Tab_Stop := 4
 Quit_Times := 3
@@ -87,7 +107,7 @@ main :: proc() {
 
 init_editor :: proc() {
     E.cx, E.cy, E.num_rows, E.rowoff, E.coloff, E.rx = 0, 0, 0, 0, 0, 0
-    E.dirty = 0
+    E.dirty, E.syntax = 0, nil
     E.filename, E.status_msg, E.status_msg_time = "", "", time.now()
     if get_window_size(&E) == .Err do die("get window size error")
     E.screen_row -= 2
@@ -104,6 +124,7 @@ append_row :: proc(line: []byte) {
 /*** file IO ***/
 editor_open :: proc (path: string) {
     E.filename = path
+    select_syntax_highlight()
     content, ok := os.read_entire_file(path)
     defer delete(content)
     if !ok do die("Failed to read file")
@@ -153,6 +174,7 @@ editor_save :: proc() {
     else { 
         set_status_message("%d bytes written to disk", len)
         E.dirty = 0
+        select_syntax_highlight()
     }
 }
 
@@ -482,7 +504,7 @@ row_rx_to_cx :: proc(row: ^E_Row, rx: int) -> int {
 draw_status_bar :: proc(buf: ^Buffer) {
     bytes.buffer_write_string(buf, "\x1b[7m")
     status := fmt.tprintf("%.20s - %d lines %s", E.filename != "" ? E.filename : "[No Name]", E.num_rows, E.dirty != 0 ? "(modified)" : "")
-    rstatus := fmt.tprintf("%d/%d", E.cy + 1, E.num_rows)
+    rstatus := fmt.tprintf("%s | %d/%d", E.syntax != nil ? E.syntax.filetype : "no ft", E.cy + 1, E.num_rows)
     if len(status) > E.screen_col do status = status[:E.screen_col]
     bytes.buffer_write_string(buf, status)
     for i in len(status)..<E.screen_col { 
@@ -704,16 +726,19 @@ find_callback :: proc(query: []byte, key: Key) {
 
 update_syntax :: proc(row: ^E_Row) {
     resize(&row.hl, row.rsize)
+    if E.syntax == nil do return 
     prev_sep := true
     for i in 0..<row.rsize {
         c := row.render[i]
         prev_hl := (i > 0) ? row.hl[i - 1] : .Hl_Normal
-        if (is_digit(c) && (prev_sep || prev_hl == .Hl_Number)) || (c == '.' && prev_hl == .Hl_Number){
-            row.hl[i] = .Hl_Number
-            prev_sep = false
-            continue
-        } else do row.hl[i] = .Hl_Normal
-        prev_sep = is_separator(c)
+        if .Hl_Highlight_Numbers in E.syntax.flags {
+            if (is_digit(c) && (prev_sep || prev_hl == .Hl_Number)) || (c == '.' && prev_hl == .Hl_Number){
+                row.hl[i] = .Hl_Number
+                prev_sep = false
+                continue
+            } else do row.hl[i] = .Hl_Normal
+            prev_sep = is_separator(c)
+        }
     }
 }
 
@@ -730,5 +755,18 @@ is_separator :: proc(c: byte) -> bool {
     switch c {
     case '\x00', ',', '.', '(', ')', '+', '-', '/', '*', '=', '~', '%', '<', '>', '[', ']', ';': return true
     case: return false
+    }
+}
+
+select_syntax_highlight :: proc() {
+    E.syntax = nil
+    if E.filename == "" do return 
+    for &e in Hl_Db {
+        for ft in e.filematch {
+            if strings.has_suffix(E.filename, ft) {
+                E.syntax = &e
+                return
+            }
+        }
     }
 }
