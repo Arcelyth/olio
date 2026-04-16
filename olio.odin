@@ -14,8 +14,8 @@ import "core:mem"
 E_Row :: struct {
     size: int,
     rsize: int,
-    chars: []byte,
-    render: []byte
+    chars: [dynamic]byte,
+    render: [dynamic]byte
 }
 
 Config :: struct {      // editor's config
@@ -87,7 +87,7 @@ init_editor :: proc() {
 }
 
 append_row :: proc(line: []byte) {
-    e := E_Row { len(line), 0, slice.clone(line), make([]byte, 0)}
+    e := E_Row { len(line), 0, slice.clone_to_dynamic(line), {}}
     append(&E.row, e)
     editor_update_row(&E.row[E.num_rows])
     E.num_rows = len(E.row)
@@ -117,7 +117,7 @@ rows_to_string :: proc() -> ([]byte, int) {
     totlen := 0
     buf : [dynamic]byte
     for r in E.row {
-        append(&buf, ..r.chars)
+        append(&buf, ..r.chars[:])
         append(&buf, '\n')
         totlen += r.size + 1
     }
@@ -127,7 +127,8 @@ rows_to_string :: proc() -> ([]byte, int) {
 editor_save :: proc() {
     if E.filename == "" do return
     buf, len := rows_to_string()
-    fd, err := os.open(E.filename, os.O_RDWR | os.O_CREATE, 0o644)
+    defer delete(buf)
+    fd, err := os.open(E.filename, os.O_RDWR | os.O_CREATE | os.O_TRUNC, 0o644)
     if err != nil {
         os.close(fd)
         set_status_message("Can't save! I/O error: %s", err)
@@ -365,8 +366,8 @@ editor_update_row :: proc(row: ^E_Row) {
     tabs := 0
     for j in 0..<row.size do if row.chars[j] == '\t' do tabs += 1
 
-    if row.render != nil do delete(row.render)
-    row.render = make([]byte, row.size + tabs*(Tab_Stop - 1))
+    if row.render != nil do clear(&row.render)
+    row.render = make([dynamic]byte, row.size + tabs*(Tab_Stop - 1))
 
     idx := 0
     for j in 0..<row.size {
@@ -422,9 +423,31 @@ draw_status_message_bar :: proc(buf: ^Buffer) {
     if len > 0 && time.since(E.status_msg_time) < 5 * time.Second do bytes.buffer_write_string(buf, E.status_msg)
 }
 
+/*** row operations ***/
+
+free_row :: proc(row: ^E_Row) {
+    delete(row.render)
+    delete(row.chars)
+} 
+
+del_row :: proc(at: int) {
+    if at < 0 || at > E.num_rows do return
+    free_row(&E.row[at])
+    ordered_remove(&E.row, at)
+    E.num_rows = len(E.row)
+    E.dirty += 1
+}
+
+row_append_string :: proc(row: ^E_Row, s: []byte) {
+    append(&row.chars, ..s) 
+    row.size += len(s)
+    editor_update_row(row)
+    E.dirty += 1
+}
+
 row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
     at := at_ < 0 || at_ > row.size ? row.size : at_
-    new_chars := make([]byte, row.size + 1)
+    new_chars := make([dynamic]byte, row.size + 1)
     if at > 0 do mem.copy(&new_chars[0], &row.chars[0], at)
     if at < row.size do mem.copy(&new_chars[at+1], &row.chars[at], row.size - at)
     if row.chars != nil do delete(row.chars)
@@ -445,16 +468,23 @@ insert_char :: proc(c: byte) {
 
 del_char :: proc() {
     if E.cy == E.num_rows do return
+    if E.cx == 0 && E.cy == 0 do return 
+    row := &E.row[E.cy]
     if E.cx > 0 {
-        row_del_char(&E.row[E.cy], E.cx - 1)
+        row_del_char(row, E.cx - 1)
         E.cx -= 1
+    } else {
+        E.cx = E.row[E.cy - 1].size
+        row_append_string(&E.row[E.cy - 1], row.chars[:])
+        del_row(E.cy)
+        E.cy -= 1
     }
 }
 
 row_del_char :: proc(row: ^E_Row, at: int) {
     if at < 0 || at > row.size do return 
-    mem.copy(&row.chars[at], &row.chars[at+1], row.size - at) 
-    row.size -= 1
+    ordered_remove(&row.chars, at)
+    row.size = len(row.chars)
     editor_update_row(row)
     E.dirty += 1
 }
