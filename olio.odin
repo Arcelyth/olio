@@ -126,7 +126,7 @@ rows_to_string :: proc() -> ([]byte, int) {
 
 editor_save :: proc() {
     if E.filename == "" {
-        E.filename = editor_prompt("Save as: %s")
+        E.filename = editor_prompt("Save as: %s (ESC to cancel)", nil)
         if E.filename == "" {
             set_status_message("Save aborted")
             return 
@@ -286,7 +286,7 @@ handle_keypress :: proc() {
     quit_times = Quit_Times
 }
 
-editor_prompt :: proc(prompt: string) -> string {
+editor_prompt :: proc(prompt: string, callback: proc([]byte, Key) = nil) -> string {
     buf: [dynamic]byte
     defer delete(buf)
     for {
@@ -305,16 +305,19 @@ editor_prompt :: proc(prompt: string) -> string {
             }
             else if v == '\x1b' {
                 set_status_message("")
+                if callback != nil do callback(buf[:], c)
                 return ""
             } else if v == '\r' {
                 if len(buf) != 0 {
                     set_status_message("")
+                    if callback != nil do callback(buf[:], c)
                     return strings.clone_from_bytes(buf[:])
                 }
             } else if !is_cntl(v) && v < 128 {
                 append(&buf, v)
             }
         } 
+        if callback != nil do callback(buf[:], c)
     }
 }
 
@@ -590,11 +593,16 @@ disable_raw_mode :: proc() {
 /*** find ***/
 
 editor_find :: proc() {
-    query := editor_prompt("Search: %s (ESC to cancel)")
+    query := editor_prompt("Search: %s (ESC to cancel)", find_callback)
     defer delete(query)
+}
+
+find_callback :: proc(query: []byte, key: Key) {
+    if key == '\r' || key == '\x1b' do return 
+
     for i in 0..<E.num_rows {
         row := &E.row[i]
-        idx := strings.index(string(row.render[:]), query)
+        idx := strings.index(string(row.render[:]), string(query))
         if idx >= 0 {
             E.cy = i
             E.cx = row_rx_to_cx(row, idx)
@@ -602,4 +610,5 @@ editor_find :: proc() {
             break
         }
     }
+
 }
