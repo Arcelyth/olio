@@ -9,6 +9,7 @@ import "core:strings"
 import "core:strconv"
 import "core:bytes"
 import "core:time"
+import "core:mem"
 
 E_Row :: struct {
     size: int,
@@ -175,7 +176,7 @@ cntl_key :: proc(b: byte) -> byte {
 }
 
 is_digit :: proc(b: byte) -> bool {
-    return b > '0' && b < '9'
+    return b >= '0' && b <= '9'
 }
 
 read_key :: proc() -> Key {
@@ -637,17 +638,45 @@ editor_find :: proc() {
 
 last_match := -1
 direction := 1
+saved_hl_line := 0
+saved_hl := [dynamic]Highlight {}
 
 find_callback :: proc(query: []byte, key: Key) {
-    if key == '\r' || key == '\x1b' {
+    if len(saved_hl) != 0 {
+        copy(E.row[saved_hl_line].hl[:], saved_hl[:])
+        clear(&saved_hl)
+    }   
+#partial switch v in key {
+    case byte:
+        if v == '\r' || v == '\x1b' {
+            last_match = -1
+            direction = 1
+            return
+        }
+    case Arrow:
+        if v == .Arrow_Right || v == .Arrow_Down do direction = 1
+        else if v == .Arrow_Left || v == .Arrow_Up do direction = -1
+    }
+
+    #partial switch v in key {
+    case byte:
+        if v == '\r' || v == '\x1b' {
+            last_match = -1
+            direction = 1
+            return
+        }
+    case Arrow:
+        if v == .Arrow_Right || v == .Arrow_Down do direction = 1
+        else if v == .Arrow_Left || v == .Arrow_Up do direction = -1
+    }
+
+    #partial switch v in key {
+    case Arrow:
+    case:
         last_match = -1
         direction = 1
-        return
-    } else if key == .Arrow_Right || key == .Arrow_Down do direction = 1
-    else if key == .Arrow_Left || key == .Arrow_Up do direction = -1
-    else do last_match, direction = -1, 1
+    }
 
-    if last_match == -1 do direction = 1
     current := last_match
     for i in 0..<E.num_rows {
         current += direction
@@ -660,22 +689,31 @@ find_callback :: proc(query: []byte, key: Key) {
             E.cy = current
             E.cx = row_rx_to_cx(row, idx)
             E.rowoff = E.num_rows
+            saved_hl_line = current
+            resize(&saved_hl, row.rsize)
+            copy(saved_hl[:], row.hl[:])
             for i in 0..<len(query) {
                 row.hl[idx + i] = .Hl_Match
             }
             break
         }
     }
-
 }
 
 /*** syntax highlighting ***/
 
 update_syntax :: proc(row: ^E_Row) {
-    resize(&row.hl, row.size)
-    for i in 0..<row.size {
-        if is_digit(row.render[i]) do row.hl[i] = .Hl_Number
-        else do row.hl[i] = .Hl_Normal
+    resize(&row.hl, row.rsize)
+    prev_sep := true
+    for i in 0..<row.rsize {
+        c := row.render[i]
+        prev_hl := (i > 0) ? row.hl[i - 1] : .Hl_Normal
+        if (is_digit(c) && (prev_sep || prev_hl == .Hl_Number)) || (c == '.' && prev_hl == .Hl_Number){
+            row.hl[i] = .Hl_Number
+            prev_sep = false
+            continue
+        } else do row.hl[i] = .Hl_Normal
+        prev_sep = is_separator(c)
     }
 }
 
@@ -684,5 +722,13 @@ syntax_to_color :: proc(hl: Highlight) -> int {
     case .Hl_Number: return 31
     case .Hl_Match: return 34
     case: return 37
+    }
+}
+
+is_separator :: proc(c: byte) -> bool {
+    if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' do return true
+    switch c {
+    case '\x00', ',', '.', '(', ')', '+', '-', '/', '*', '=', '~', '%', '<', '>', '[', ']', ';': return true
+    case: return false
     }
 }
