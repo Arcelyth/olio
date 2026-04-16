@@ -8,8 +8,8 @@ import "core:slice"
 import "core:strings"
 import "core:strconv"
 import "core:bytes"
-import "core:builtin"
 import "core:time"
+import "core:mem"
 
 E_Row :: struct {
     size: int,
@@ -76,7 +76,7 @@ main :: proc() {
 }
 
 init_editor :: proc() {
-    E.cx, E.cy, E.num_rows, E.rowoff, E.rx = 0, 0, 0, 0, 0
+    E.cx, E.cy, E.num_rows, E.rowoff, E.coloff, E.rx = 0, 0, 0, 0, 0, 0
     E.filename, E.status_msg, E.status_msg_time = "", "", time.now()
     if get_window_size(&E) == .Err do die("get window size error")
     E.screen_row -= 2
@@ -175,20 +175,27 @@ read_key :: proc() -> Key {
 
 handle_keypress :: proc() {
     c := read_key()
-    switch c {
-    case cntl_key('q'): exit(0)
-    case .Page_Up, .Page_Down: 
-        if c == .Page_Up do E.cy = E.rowoff
-        else if c == .Page_Down {
-            E.cy = E.rowoff + E.screen_row - 1
-            if E.cy > E.num_rows do E.cy = E.num_rows
+    switch v in c {
+    case Arrow:
+        #partial switch v {
+        case .Page_Up, .Page_Down: 
+            if c == .Page_Up do E.cy = E.rowoff
+            else if c == .Page_Down {
+                E.cy = E.rowoff + E.screen_row - 1
+                if E.cy > E.num_rows do E.cy = E.num_rows
+            }
+            for _ in 0..<E.screen_row {
+                move_cursor(c == .Page_Up ? .Arrow_Up : .Arrow_Down)
+            }
+        case .Home_Key: E.cx = 0
+        case .End_Key: if E.cy < E.num_rows do E.cx = E.row[E.cy].size
+        case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
         }
-        for _ in 0..<E.screen_row {
-            move_cursor(c == .Page_Up ? .Arrow_Up : .Arrow_Down)
+    case byte: 
+        switch v {
+        case cntl_key('q'): exit(0)
+        case: insert_char(v)
         }
-    case .Home_Key: E.cx = 0
-    case .End_Key: if E.cy < E.num_rows do E.cx = E.row[E.cy].size
-    case .Arrow_Up, .Arrow_Down, .Arrow_Left, .Arrow_Right: move_cursor(c)
     } 
 }
 
@@ -215,10 +222,12 @@ draw_rows :: proc(buf: ^Buffer) {
                 bytes.buffer_write_string(buf, "~")
             }
         } else {
-            len := E.row[filerow].rsize - E.coloff
-            if len < 0 do len = 0
-            if len > E.screen_col do len = E.screen_col
-            bytes.buffer_write(buf, E.row[filerow].render[E.coloff:E.coloff+len])
+            if E.coloff < E.row[filerow].rsize {
+                len := E.row[filerow].rsize - E.coloff
+                if len < 0 do len = 0
+                if len > E.screen_col do len = E.screen_col
+                bytes.buffer_write(buf, E.row[filerow].render[E.coloff:E.coloff+len]) 
+            }
         }
         bytes.buffer_write_string(buf, "\x1b[K")    // erase in line
         bytes.buffer_write_string(buf, "\r\n") 
@@ -236,12 +245,12 @@ refresh_screen :: proc() {
     pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1)
     bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
-    os.write_string(os.stdin, bytes.buffer_to_string(&buffer))
+    os.write_string(os.stdout, bytes.buffer_to_string(&buffer))
 }
 
 get_cursor_pos :: proc(conf: ^Config) -> Result {
     buf: [dynamic]byte
-    if _, err := os.write_string(os.stdin, "\x1b[6n"); err != nil do return .Err // report active position
+    if _, err := os.write_string(os.stdout, "\x1b[6n"); err != nil do return .Err // report active position
     fmt.printf("\r\n")
     for i in 0..<size_of(buf) - 1 {
         b: [1]byte
@@ -260,7 +269,7 @@ get_cursor_pos :: proc(conf: ^Config) -> Result {
 }
 
 get_window_size :: proc(conf: ^Config) -> Result {
-    if _, err := os.write_string(os.stdin, "\x1b[999C\x1b[999B"); err != nil do return .Err
+    if _, err := os.write_string(os.stdout, "\x1b[999C\x1b[999B"); err != nil do return .Err
     return get_cursor_pos(conf)
 }
 
@@ -355,6 +364,26 @@ draw_status_message_bar :: proc(buf: ^Buffer) {
     len := len(E.status_msg)
     if len > E.screen_col do len = E.screen_col
     if len > 0 && time.since(E.status_msg_time) < 5 * time.Second do bytes.buffer_write_string(buf, E.status_msg)
+}
+
+row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
+    at := at_ < 0 || at_ > row.size ? row.size : at_
+    new_chars := make([]byte, row.size + 1)
+    if at > 0 do mem.copy(&new_chars[0], &row.chars[0], at)
+    if at < row.size do mem.copy(&new_chars[at+1], &row.chars[at], row.size - at)
+    if row.chars != nil do delete(row.chars)
+    new_chars[at] = c
+    row.size += 1
+    row.chars = new_chars
+    editor_update_row(row)
+}
+
+/*** editor operations ***/
+
+insert_char :: proc(c: byte) {
+    if E.cy == E.num_rows do append_row([]byte{})
+    row_insert_char(&E.row[E.cy], E.cx, c)
+    E.cx += 1
 }
 
 enable_raw_mode :: proc() {
