@@ -400,7 +400,16 @@ draw_rows :: proc(buf: ^Buffer) {
                 hl := E.row[filerow].hl[E.coloff:]
                 current_color := -1
                 for j in 0..<len {
-                    if hl[j] == .Hl_Normal {
+                    if is_cntl(c[j]) {
+                        sym := c[j] <= 26 ? '@' + c[j] : '?'
+                        bytes.buffer_write_string(buf, "\x1b[7m")
+                        bytes.buffer_write_byte(buf, sym)
+                        bytes.buffer_write_string(buf, "\x1b[m")
+                        if current_color != -1 {
+                            color_f := fmt.tprintf("\x1b[%dm", current_color)
+                            bytes.buffer_write_string(buf, color_f)
+                        }
+                    } else if hl[j] == .Hl_Normal {
                         if current_color != -1 {
                             bytes.buffer_write_string(buf, "\x1b[39m")
                             current_color = -1 
