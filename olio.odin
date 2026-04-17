@@ -47,6 +47,8 @@ Result :: enum {
 Highlight :: enum {
     Hl_Normal,
     Hl_Number,
+    Hl_String,
+    Hl_Escape,
     Hl_Match
 }
 
@@ -69,7 +71,9 @@ Arrow :: enum {
 }
 
 Syntax_Flag :: enum {
-    Hl_Highlight_Numbers
+    Hl_Highlight_Numbers,
+    Hl_Highlight_String,
+    Hl_Highlight_Escape,
 }
 
 Syntax :: struct {
@@ -83,7 +87,7 @@ Hl_Db := []Syntax {
     Syntax {
         "c", 
         C_Hl_Extensions,
-        {.Hl_Highlight_Numbers}
+        {.Hl_Highlight_Numbers, .Hl_Highlight_String, .Hl_Highlight_Escape}
     },
 }
 
@@ -728,9 +732,32 @@ update_syntax :: proc(row: ^E_Row) {
     resize(&row.hl, row.rsize)
     if E.syntax == nil do return 
     prev_sep := true
-    for i in 0..<row.rsize {
+    in_string: byte = 0     // ' or " 
+    for i:= 0; i < row.rsize; i += 1 {
         c := row.render[i]
         prev_hl := (i > 0) ? row.hl[i - 1] : .Hl_Normal
+        if .Hl_Highlight_String in E.syntax.flags {
+            if in_string != 0 {
+                row.hl[i] = .Hl_String
+                if c == '\\' && i + 1 < row.rsize {
+                    if .Hl_Highlight_Escape in E.syntax.flags {
+                        row.hl[i] = .Hl_Escape
+                        row.hl[i+1] = .Hl_Escape
+                    } else do row.hl[i+1] = .Hl_String
+                    i += 1
+                    continue
+                }
+                if c == in_string do in_string = 0
+                prev_sep = true
+                continue
+            } else {
+                if c == '"' || c == '\'' {
+                    in_string = c
+                    row.hl[i] = .Hl_String
+                    continue
+                }
+            }
+        }
         if .Hl_Highlight_Numbers in E.syntax.flags {
             if (is_digit(c) && (prev_sep || prev_hl == .Hl_Number)) || (c == '.' && prev_hl == .Hl_Number){
                 row.hl[i] = .Hl_Number
@@ -745,7 +772,9 @@ update_syntax :: proc(row: ^E_Row) {
 syntax_to_color :: proc(hl: Highlight) -> int {
     #partial switch hl {
     case .Hl_Number: return 31
-    case .Hl_Match: return 34
+    case .Hl_Match: return 36
+    case .Hl_String: return 35
+    case .Hl_Escape: return 34
     case: return 37
     }
 }
