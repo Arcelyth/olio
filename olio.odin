@@ -503,7 +503,8 @@ draw_status_bar :: proc(buf: ^Buffer) {
 }
 
 set_status_message :: proc(format: string, args: ..any) {
-    E.status_msg = fmt.tprintf(format, ..args)
+    if len(E.status_msg) != 0 do delete(E.status_msg)
+    E.status_msg = strings.clone(fmt.tprintf(format, ..args))
     E.status_msg_time = time.now()
 }
 
