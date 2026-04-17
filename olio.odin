@@ -765,6 +765,7 @@ select_syntax_highlight :: proc() {
         for ft in e.filematch {
             if strings.has_suffix(E.filename, ft) {
                 E.syntax = &e
+                for r in 0..<E.num_rows do update_syntax(&E.row[r])
                 return
             }
         }
