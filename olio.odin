@@ -9,7 +9,7 @@ import "core:strings"
 import "core:strconv"
 import "core:bytes"
 import "core:time"
-import "core:mem"
+import "core:math"
 
 E_Row :: struct {
     idx: int,
@@ -136,7 +136,7 @@ Hl_Db := []Syntax {
     }
 }
 
-Olio_Version := "0.0.1"
+Olio_Version := "0.3.0"
 Tab_Stop := 4
 Quit_Times := 3
 
@@ -149,6 +149,7 @@ append_row :: proc(line: []byte) {
 }
 
 /*** file IO ***/
+
 editor_open :: proc (path: string) {
     E.filename = path
     select_syntax_highlight()
@@ -164,7 +165,12 @@ editor_open :: proc (path: string) {
             insert_row(E.num_rows, line)
             start = i + 1
         }
-    } 
+    }
+    if start < len(content) {   // handle last line
+        line := content[start:]
+        if len(line) > 0 && line[len(line)-1] == '\r' do line = line[:len(line)-1]
+        insert_row(E.num_rows, line)
+    }
     E.dirty = 0
 }
 
@@ -366,6 +372,8 @@ clear_screen :: proc(buf: ^Buffer) {
 }
 
 draw_rows :: proc(buf: ^Buffer) {
+    lines_len := get_num_len(f64(E.num_rows))
+    text_width := E.screen_col - (lines_len + 3)
     for r in 0..<E.screen_row {
         filerow := r + E.rowoff
         if filerow >= E.num_rows {
@@ -374,7 +382,7 @@ draw_rows :: proc(buf: ^Buffer) {
                 if len(wel) > E.screen_col do wel = strings.cut(wel, 0, E.screen_col)
                 padding := (E.screen_col - len(wel)) / 2
                 if padding > 0 {
-                    bytes.buffer_write_string(buf, "~")
+                    bytes.buffer_write_string(buf, "~ |")
                     padding -= 1
                 }
                 for _ in 0..<padding do bytes.buffer_write_string(buf, " ") 
@@ -383,10 +391,13 @@ draw_rows :: proc(buf: ^Buffer) {
                 bytes.buffer_write_string(buf, "~")
             }
         } else {
+            bytes.buffer_write_string(buf, "\x1b[90m")  // draw line numbers
+            line_f := fmt.tprintf("% *d | ",lines_len, r + 1 + E.rowoff)
+            bytes.buffer_write_string(buf, line_f)
+            bytes.buffer_write_string(buf, "\x1b[m")
             if E.coloff < E.row[filerow].rsize {
-                len := E.row[filerow].rsize - E.coloff
-                if len < 0 do len = 0
-                if len > E.screen_col do len = E.screen_col
+                remain := E.row[filerow].rsize - E.coloff
+                len := min(remain, text_width)
                 c := E.row[filerow].render[E.coloff:]
                 hl := E.row[filerow].hl[E.coloff:]
                 current_color := -1
@@ -427,12 +438,14 @@ draw_rows :: proc(buf: ^Buffer) {
 refresh_screen :: proc() {
     editor_scroll()
     buffer: Buffer
+    defer bytes.buffer_destroy(&buffer)
     bytes.buffer_write_string(&buffer, "\x1b[?25l")
     bytes.buffer_write_string(&buffer, "\x1b[H")
     draw_rows(&buffer)
     draw_status_bar(&buffer)
     draw_status_message_bar(&buffer)
-    pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1)
+    line_len := get_num_len(f64(E.num_rows))
+    pos := fmt.tprintf("\x1b[%d;%dH", E.cy - E.rowoff + 1, (E.rx + line_len + 3) - E.coloff + 1)
     bytes.buffer_write_string(&buffer, pos)
     bytes.buffer_write_string(&buffer, "\x1b[?25h")
     os.write_string(os.stdout, bytes.buffer_to_string(&buffer))
@@ -443,8 +456,10 @@ editor_scroll :: proc() {
     if E.cy < E.num_rows do E.rx = row_cx_to_rx(&E.row[E.cy], E.cx)
     if E.cy < E.rowoff do E.rowoff = E.cy
     if E.cy >= E.rowoff + E.screen_row do E.rowoff = E.cy - E.screen_row + 1
+    line_len := get_num_len(f64(E.num_rows))
+    text_width := E.screen_col - (line_len + 3)
     if E.rx < E.coloff do E.coloff = E.rx
-    if E.rx >= E.coloff + E.screen_col do E.coloff = E.rx - E.screen_col + 1
+    if E.rx >= E.coloff + E.screen_col do E.coloff = E.rx - text_width + 1
 }
 
 editor_update_row :: proc(row: ^E_Row) {
@@ -560,9 +575,9 @@ del_row :: proc(at: int) {
 
 insert_row :: proc(at: int, s: []byte) {
     if at < 0 || at > E.num_rows do return 
-    for j in at+1..=E.num_rows do E.row[j].idx += 1
     new_row := E_Row {at, len(s), 0, slice.clone_to_dynamic(s), {}, {}, false}
     inject_at(&E.row, at, new_row)
+    for j in at+1..=E.num_rows do E.row[j].idx += 1
     editor_update_row(&E.row[at])
     E.num_rows += 1
     E.dirty += 1
@@ -696,17 +711,6 @@ find_callback :: proc(query: []byte, key: Key) {
         copy(E.row[saved_hl_line].hl[:], saved_hl[:])
         clear(&saved_hl)
     }   
-#partial switch v in key {
-    case byte:
-        if v == '\r' || v == '\x1b' {
-            last_match = -1
-            direction = 1
-            return
-        }
-    case Arrow:
-        if v == .Arrow_Right || v == .Arrow_Down do direction = 1
-        else if v == .Arrow_Left || v == .Arrow_Up do direction = -1
-    }
 
     #partial switch v in key {
     case byte:
@@ -717,11 +721,7 @@ find_callback :: proc(query: []byte, key: Key) {
         }
     case Arrow:
         if v == .Arrow_Right || v == .Arrow_Down do direction = 1
-        else if v == .Arrow_Left || v == .Arrow_Up do direction = -1
-    }
-
-    #partial switch v in key {
-    case Arrow:
+        else if v == .Arrow_Left   || v == .Arrow_Up   do direction = -1
     case:
         last_match = -1
         direction = 1
@@ -901,6 +901,11 @@ is_digit :: proc(b: byte) -> bool {
     return b >= '0' && b <= '9'
 }
 
+get_num_len :: proc(n: f64) -> int {
+    if n <= 0. do return 1
+    else do return int(math.log10(n)) + 1
+}
+
 /*** init ***/
 
 init_editor :: proc() {
@@ -922,7 +927,7 @@ main :: proc() {
     for {
         refresh_screen()
         handle_keypress()
+        free_all(context.temp_allocator)
     }
 }
-
 
