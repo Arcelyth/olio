@@ -140,28 +140,6 @@ Olio_Version := "0.0.1"
 Tab_Stop := 4
 Quit_Times := 3
 
-main :: proc() {
-    defer disable_raw_mode()
-    enable_raw_mode()    
-    init_editor()
-    if len(os.args) >= 2 {
-        editor_open(os.args[1])
-    }
-    set_status_message("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find")
-    for {
-        refresh_screen()
-        handle_keypress()
-    }
-}
-
-init_editor :: proc() {
-    E.cx, E.cy, E.num_rows, E.rowoff, E.coloff, E.rx = 0, 0, 0, 0, 0, 0
-    E.dirty, E.syntax = 0, nil
-    E.filename, E.status_msg, E.status_msg_time = "", "", time.now()
-    if get_window_size(&E) == .Err do die("get window size error")
-    E.screen_row -= 2
-}
-
 append_row :: proc(line: []byte) {
     e := E_Row {0, len(line), 0, slice.clone_to_dynamic(line), {}, {}, false}
     append(&E.row, e)
@@ -225,29 +203,6 @@ editor_save :: proc() {
         E.dirty = 0
         select_syntax_highlight()
     }
-}
-
-die :: proc(msg: string) {
-    disable_raw_mode()
-    fmt.println(msg)
-    os.exit(1)
-}
-
-exit :: proc(code: int) {
-    disable_raw_mode()
-    os.exit(code)
-}
-
-is_cntl :: proc(b: byte) -> bool {
-    return b <= 31 || b == 127
-}
-
-cntl_key :: proc(b: byte) -> byte {
-    return b & 0x1f
-}
-
-is_digit :: proc(b: byte) -> bool {
-    return b >= '0' && b <= '9'
 }
 
 read_key :: proc() -> Key {
@@ -403,6 +358,8 @@ editor_prompt :: proc(prompt: string, callback: proc([]byte, Key) = nil) -> stri
     }
 }
 
+/*** output ***/
+
 clear_screen :: proc(buf: ^Buffer) {
     bytes.buffer_write_string(buf, "\x1b[2J")
     bytes.buffer_write_string(buf, "\x1b[H")
@@ -481,31 +438,6 @@ refresh_screen :: proc() {
     os.write_string(os.stdout, bytes.buffer_to_string(&buffer))
 }
 
-get_cursor_pos :: proc(conf: ^Config) -> Result {
-    buf: [dynamic]byte
-    if _, err := os.write_string(os.stdout, "\x1b[6n"); err != nil do return .Err // report active position
-    fmt.printf("\r\n")
-    for i in 0..<size_of(buf) - 1 {
-        b: [1]byte
-        if _, err := os.read(os.stdin, b[:]); err != nil do break
-        if b[0] == 'R' do break
-        append(&buf, b[0])
-    }
-    if buf[0] != '\x1b' || buf[1] != '[' do return .Err // parse the response which is a escape sequence
-    res := buf[2:]
-    if ss := strings.split(string(res), ";"); len(ss) == 2 {
-        if res, ok := strconv.parse_int(ss[0]); ok do conf.screen_row = res
-        if res, ok := strconv.parse_int(ss[1]); ok do conf.screen_col = res
-    } 
-
-    return .Ok
-}
-
-get_window_size :: proc(conf: ^Config) -> Result {
-    if _, err := os.write_string(os.stdout, "\x1b[999C\x1b[999B"); err != nil do return .Err
-    return get_cursor_pos(conf)
-}
-
 editor_scroll :: proc() {
     E.rx = 0
     if E.cy < E.num_rows do E.rx = row_cx_to_rx(&E.row[E.cy], E.cx)
@@ -539,26 +471,6 @@ editor_update_row :: proc(row: ^E_Row) {
     update_syntax(row)
 }
 
-row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
-    rx := 0
-    for j := 0; j < cx; j += 1 {
-        if row.chars[j] == '\t' do rx += Tab_Stop - 1 - rx % Tab_Stop
-        rx += 1
-    }
-    return rx
-}
-
-row_rx_to_cx :: proc(row: ^E_Row, rx: int) -> int {
-    cur_rx := 0
-    for i in 0..<row.size {
-        if row.chars[i] == '\t' do cur_rx += Tab_Stop - 1 - cur_rx % Tab_Stop
-        cur_rx += 1
-        if cur_rx > rx do return i 
-    }
-    return row.size
-}
-
-
 draw_status_bar :: proc(buf: ^Buffer) {
     bytes.buffer_write_string(buf, "\x1b[7m")
     status := fmt.tprintf("%.20s - %d lines %s", E.filename != "" ? E.filename : "[No Name]", E.num_rows, E.dirty != 0 ? "(modified)" : "")
@@ -589,20 +501,30 @@ draw_status_message_bar :: proc(buf: ^Buffer) {
 
 /*** row operations ***/
 
+row_cx_to_rx :: proc(row: ^E_Row, cx: int) -> int {
+    rx := 0
+    for j := 0; j < cx; j += 1 {
+        if row.chars[j] == '\t' do rx += Tab_Stop - 1 - rx % Tab_Stop
+        rx += 1
+    }
+    return rx
+}
+
+row_rx_to_cx :: proc(row: ^E_Row, rx: int) -> int {
+    cur_rx := 0
+    for i in 0..<row.size {
+        if row.chars[i] == '\t' do cur_rx += Tab_Stop - 1 - cur_rx % Tab_Stop
+        cur_rx += 1
+        if cur_rx > rx do return i 
+    }
+    return row.size
+}
+
 free_row :: proc(row: ^E_Row) {
     delete(row.render)
     delete(row.chars)
     delete(row.hl)
 } 
-
-del_row :: proc(at: int) {
-    if at < 0 || at >= E.num_rows do return
-    free_row(&E.row[at])
-    ordered_remove(&E.row, at)
-    for j in at..<E.num_rows-1 do E.row[j].idx -= 1
-    E.num_rows = len(E.row)
-    E.dirty += 1
-}
 
 row_append_string :: proc(row: ^E_Row, s: []byte) {
     append(&row.chars, ..s) 
@@ -616,6 +538,23 @@ row_insert_char :: proc(row: ^E_Row, at_: int, c: byte) {
     inject_at(&row.chars, at, c)
     row.size = len(row.chars)
     editor_update_row(row)
+    E.dirty += 1
+}
+
+row_del_char :: proc(row: ^E_Row, at: int) {
+    if at < 0 || at >= row.size do return 
+    ordered_remove(&row.chars, at)
+    row.size = len(row.chars)
+    editor_update_row(row)
+    E.dirty += 1
+}
+
+del_row :: proc(at: int) {
+    if at < 0 || at >= E.num_rows do return
+    free_row(&E.row[at])
+    ordered_remove(&E.row, at)
+    for j in at..<E.num_rows-1 do E.row[j].idx -= 1
+    E.num_rows = len(E.row)
     E.dirty += 1
 }
 
@@ -666,12 +605,17 @@ del_char :: proc() {
     }
 }
 
-row_del_char :: proc(row: ^E_Row, at: int) {
-    if at < 0 || at >= row.size do return 
-    ordered_remove(&row.chars, at)
-    row.size = len(row.chars)
-    editor_update_row(row)
-    E.dirty += 1
+/*** terminal ***/
+
+die :: proc(msg: string) {
+    disable_raw_mode()
+    fmt.println(msg)
+    os.exit(1)
+}
+
+exit :: proc(code: int) {
+    disable_raw_mode()
+    os.exit(code)
 }
 
 enable_raw_mode :: proc() {
@@ -703,6 +647,30 @@ enable_raw_mode :: proc() {
 
 disable_raw_mode :: proc() {
     if posix.tcsetattr(posix.STDIN_FILENO, posix.TC_Optional_Action.TCSAFLUSH, &E.origin_termios) != posix.result.OK do die("tcsetattr error")
+}
+
+get_cursor_pos :: proc(conf: ^Config) -> Result {
+    buf: [dynamic]byte
+    if _, err := os.write_string(os.stdout, "\x1b[6n"); err != nil do return .Err // report active position
+    fmt.printf("\r\n")
+    for i in 0..<size_of(buf) - 1 {
+        b: [1]byte
+        if _, err := os.read(os.stdin, b[:]); err != nil do break
+        if b[0] == 'R' do break
+        append(&buf, b[0])
+    }
+    if buf[0] != '\x1b' || buf[1] != '[' do return .Err // parse the response which is a escape sequence
+    res := buf[2:]
+    if ss := strings.split(string(res), ";"); len(ss) == 2 {
+        if res, ok := strconv.parse_int(ss[0]); ok do conf.screen_row = res
+        if res, ok := strconv.parse_int(ss[1]); ok do conf.screen_col = res
+    } 
+    return .Ok
+}
+
+get_window_size :: proc(conf: ^Config) -> Result {
+    if _, err := os.write_string(os.stdout, "\x1b[999C\x1b[999B"); err != nil do return .Err
+    return get_cursor_pos(conf)
 }
 
 /*** find ***/
@@ -918,3 +886,43 @@ select_syntax_highlight :: proc() {
         }
     }
 }
+
+/*** util ***/
+
+is_cntl :: proc(b: byte) -> bool {
+    return b <= 31 || b == 127
+}
+
+cntl_key :: proc(b: byte) -> byte {
+    return b & 0x1f
+}
+
+is_digit :: proc(b: byte) -> bool {
+    return b >= '0' && b <= '9'
+}
+
+/*** init ***/
+
+init_editor :: proc() {
+    E.cx, E.cy, E.num_rows, E.rowoff, E.coloff, E.rx = 0, 0, 0, 0, 0, 0
+    E.dirty, E.syntax = 0, nil
+    E.filename, E.status_msg, E.status_msg_time = "", "", time.now()
+    if get_window_size(&E) == .Err do die("get window size error")
+    E.screen_row -= 2
+}
+
+main :: proc() {
+    defer disable_raw_mode()
+    enable_raw_mode()    
+    init_editor()
+    if len(os.args) >= 2 {
+        editor_open(os.args[1])
+    }
+    set_status_message("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find")
+    for {
+        refresh_screen()
+        handle_keypress()
+    }
+}
+
+
