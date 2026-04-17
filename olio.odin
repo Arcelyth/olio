@@ -12,11 +12,13 @@ import "core:time"
 import "core:mem"
 
 E_Row :: struct {
+    idx: int,
     size: int,
     rsize: int,
     chars: [dynamic]byte,
     render: [dynamic]byte,
-    hl: [dynamic]Highlight
+    hl: [dynamic]Highlight,
+    hl_open_comment: bool
 }
 
 Config :: struct {      // editor's config
@@ -47,6 +49,7 @@ Result :: enum {
 Highlight :: enum {
     Hl_Normal,
     Hl_Comment,
+    Hl_Mlcomment,
     Hl_Keyword1,
     Hl_Keyword2,
     Hl_Number,
@@ -84,6 +87,8 @@ Syntax :: struct {
     filematch: []string,
     keywords: []string,
     singleline_comment_start: string,
+    multiline_comment_start: string,
+    multiline_comment_end: string,
     flags: bit_set[Syntax_Flag; u32]
 }
 
@@ -97,7 +102,7 @@ Hl_Db := []Syntax {
         "c", 
         C_Hl_Extensions,
         C_Hl_Keywords,
-        "//",
+        "//", "/*", "*/",
         {.Hl_Highlight_Numbers, .Hl_Highlight_String, .Hl_Highlight_Escape}
     },
 }
@@ -129,7 +134,7 @@ init_editor :: proc() {
 }
 
 append_row :: proc(line: []byte) {
-    e := E_Row { len(line), 0, slice.clone_to_dynamic(line), {}, {}}
+    e := E_Row {0, len(line), 0, slice.clone_to_dynamic(line), {}, {}, false}
     append(&E.row, e)
     editor_update_row(&E.row[E.num_rows])
     E.num_rows = len(E.row)
@@ -565,6 +570,7 @@ del_row :: proc(at: int) {
     if at < 0 || at >= E.num_rows do return
     free_row(&E.row[at])
     ordered_remove(&E.row, at)
+    for j in at..<E.num_rows-1 do E.row[j].idx -= 1
     E.num_rows = len(E.row)
     E.dirty += 1
 }
@@ -576,7 +582,7 @@ row_append_string :: proc(row: ^E_Row, s: []byte) {
     E.dirty += 1
 }
 
-row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
+row_insert_char :: proc(row: ^E_Row, at_: int, c: byte) {
     at := at_ < 0 || at_ > row.size ? row.size : at_
     inject_at(&row.chars, at, c)
     row.size = len(row.chars)
@@ -586,7 +592,8 @@ row_insert_char :: proc(row: ^E_Row, at_:int, c: byte) {
 
 insert_row :: proc(at: int, s: []byte) {
     if at < 0 || at > E.num_rows do return 
-    new_row := E_Row {len(s), 0, slice.clone_to_dynamic(s), {}, {}}
+    for j in at+1..=E.num_rows do E.row[j].idx += 1
+    new_row := E_Row {at, len(s), 0, slice.clone_to_dynamic(s), {}, {}, false}
     inject_at(&E.row, at, new_row)
     editor_update_row(&E.row[at])
     E.num_rows += 1
@@ -753,18 +760,38 @@ update_syntax :: proc(row: ^E_Row) {
     if E.syntax == nil do return 
     keywords := E.syntax.keywords
     scs := E.syntax.singleline_comment_start
+    mcs := E.syntax.multiline_comment_start
+    mce := E.syntax.multiline_comment_end
     prev_sep := true
     in_string: byte = 0     // ' or " 
+    in_comment := row.idx > 0 && E.row[row.idx - 1].hl_open_comment
     for i := 0; i < row.rsize; i += 1 {
         c := row.render[i]
         prev_hl := (i > 0) ? row.hl[i - 1] : .Hl_Normal
     
-        if len(scs) != 0 && in_string == 0 {
+        if len(scs) != 0 && in_string == 0 && !in_comment {
             if strings.has_prefix(string(row.render[i:]), scs) {
                 for j in i..<row.rsize {
                     row.hl[j] = .Hl_Comment
                 }
                 break
+            }
+        }
+
+        if len(mcs) != 0 && len(mce) != 0 && in_string == 0 {
+            if in_comment {
+                row.hl[i] = .Hl_Mlcomment
+                if strings.has_prefix(string(row.render[i:]), mce) {
+                    for j in i..<len(mce) do row.hl[j] = .Hl_Mlcomment
+                    i += len(mce) - 1
+                    in_comment, prev_sep = false, true
+                    continue
+                } else do continue
+            } else if strings.has_prefix(string(row.render[i:]), mcs) {
+                for j in i..<len(mcs) do row.hl[j] = .Hl_Mlcomment
+                i += len(mcs) - 1
+                in_comment = true
+                continue
             }
         }
 
@@ -822,11 +849,15 @@ update_syntax :: proc(row: ^E_Row) {
         }
         prev_sep = is_separator(c)
     }
+
+    changed := row.hl_open_comment != in_comment
+    row.hl_open_comment = in_comment
+    if changed && row.idx + 1 < E.num_rows do update_syntax(&E.row[row.idx + 1])
 }
 
 syntax_to_color :: proc(hl: Highlight) -> int {
     #partial switch hl {
-    case .Hl_Comment: return 32
+    case .Hl_Comment, .Hl_Mlcomment: return 32
     case .Hl_Keyword1: return 33
     case .Hl_Keyword2: return 34
     case .Hl_Number: return 31
