@@ -780,13 +780,13 @@ update_syntax :: proc(row: ^E_Row) {
             if in_comment {
                 row.hl[i] = .Hl_Mlcomment
                 if strings.has_prefix(string(row.render[i:]), mce) {
-                    for j in i..<len(mce) do row.hl[j] = .Hl_Mlcomment
+                    for j in i..<i+len(mce) do row.hl[j] = .Hl_Mlcomment
                     i += len(mce) - 1
                     in_comment, prev_sep = false, true
                     continue
                 } else do continue
             } else if strings.has_prefix(string(row.render[i:]), mcs) {
-                for j in i..<len(mcs) do row.hl[j] = .Hl_Mlcomment
+                for j in i..<i+len(mcs) do row.hl[j] = .Hl_Mlcomment
                 i += len(mcs) - 1
                 in_comment = true
                 continue
