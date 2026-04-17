@@ -96,7 +96,29 @@ C_Hl_Extensions := []string {".c", ".h", ".cpp"}
 C_Hl_Keywords := []string {
     "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class", "case",
     "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|"
-} 
+}
+
+Odin_Hl_Extensions := []string {".odin"}
+Odin_Hl_Keywords := []string {
+    "if", "else", "for", "switch", "case", "break", "continue", "return", "defer", 
+    "do", "when", "where", "fallthrough", "proc", "struct", "enum", "union", 
+    "bit_field", "bit_set", "map", "dynamic", "import", "export", "foreign", 
+    "package", "using", "distinct", "opaque", "inline", "no_inline", "asm", 
+    "context", "cast", "auto_cast", "transmute", "in", "notin", "not_in",
+    "size_of", "offset_of", "type_info_of", "typeid_of", "type_of", "align_of",
+    "or_return", "or_else", "or_break", "or_continue",
+
+    "int|", "uint|", "uintptr|", "i8|", "i16|", "i32|", "i64|", "i128|", 
+    "u8|", "u16|", "u32|", "u64|", "u128|", "f16|", "f32|", "f64|", 
+    "bool|", "b8|", "b16|", "b32|", "b64|", "string|", "cstring|", "rune|", 
+    "any|", "rawptr|", "typeid|", "complex32|", "complex64|", "complex128|",
+    "quaternion64|", "quaternion128|", "quaternion256|", "matrix|",
+    "i16le|", "i32le|", "i64le|", "i128le|", "u16le|", "u32le|", "u64le|", "u128le|",
+    "i16be|", "i32be|", "i64be|", "i128be|", "u16be|", "u32be|", "u64be|", "u128be|",
+    "f16le|", "f32le|", "f64le|", "f16be|", "f32be|", "f64be|",
+    "true|", "false|", "nil|",
+}
+
 Hl_Db := []Syntax {
     Syntax {
         "c", 
@@ -105,6 +127,13 @@ Hl_Db := []Syntax {
         "//", "/*", "*/",
         {.Hl_Highlight_Numbers, .Hl_Highlight_String, .Hl_Highlight_Escape}
     },
+    Syntax {
+        "odin",
+        Odin_Hl_Extensions,
+        Odin_Hl_Keywords,
+        "//", "/*", "*/",
+        {.Hl_Highlight_Numbers, .Hl_Highlight_String, .Hl_Highlight_Escape}
+    }
 }
 
 Olio_Version := "0.0.1"
