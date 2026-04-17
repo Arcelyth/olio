@@ -46,6 +46,9 @@ Result :: enum {
 
 Highlight :: enum {
     Hl_Normal,
+    Hl_Comment,
+    Hl_Keyword1,
+    Hl_Keyword2,
     Hl_Number,
     Hl_String,
     Hl_Escape,
@@ -79,14 +82,22 @@ Syntax_Flag :: enum {
 Syntax :: struct {
     filetype: string,
     filematch: []string,
+    keywords: []string,
+    singleline_comment_start: string,
     flags: bit_set[Syntax_Flag; u32]
 }
 
 C_Hl_Extensions := []string {".c", ".h", ".cpp"}
+C_Hl_Keywords := []string {
+    "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class", "case",
+    "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|"
+} 
 Hl_Db := []Syntax {
     Syntax {
         "c", 
         C_Hl_Extensions,
+        C_Hl_Keywords,
+        "//",
         {.Hl_Highlight_Numbers, .Hl_Highlight_String, .Hl_Highlight_Escape}
     },
 }
@@ -731,11 +742,23 @@ find_callback :: proc(query: []byte, key: Key) {
 update_syntax :: proc(row: ^E_Row) {
     resize(&row.hl, row.rsize)
     if E.syntax == nil do return 
+    keywords := E.syntax.keywords
+    scs := E.syntax.singleline_comment_start
     prev_sep := true
     in_string: byte = 0     // ' or " 
-    for i:= 0; i < row.rsize; i += 1 {
+    for i := 0; i < row.rsize; i += 1 {
         c := row.render[i]
         prev_hl := (i > 0) ? row.hl[i - 1] : .Hl_Normal
+    
+        if len(scs) != 0 && in_string == 0 {
+            if strings.has_prefix(string(row.render[i:]), scs) {
+                for j in i..<row.rsize {
+                    row.hl[j] = .Hl_Comment
+                }
+                break
+            }
+        }
+
         if .Hl_Highlight_String in E.syntax.flags {
             if in_string != 0 {
                 row.hl[i] = .Hl_String
@@ -764,13 +787,39 @@ update_syntax :: proc(row: ^E_Row) {
                 prev_sep = false
                 continue
             } else do row.hl[i] = .Hl_Normal
-            prev_sep = is_separator(c)
         }
+
+        if prev_sep {
+            found_kw := false
+            for keyword in keywords {
+                idx := strings.last_index(keyword, "|")
+                kw := idx >= 0 ? keyword[:idx] : keyword
+                kw_len := len(kw)
+                if strings.has_prefix(string(row.render[i:]), kw) {
+                    next_char_idx := i + kw_len
+                    is_end_or_sep := next_char_idx >= row.rsize || is_separator(row.render[next_char_idx])
+                    if is_end_or_sep { 
+                        for j in i..<i + kw_len do row.hl[j] = idx >= 0 ? .Hl_Keyword2 : .Hl_Keyword1
+                        i += kw_len - 1
+                        found_kw = true
+                        break
+                    }
+                }
+            }
+            if found_kw {
+                prev_sep = false
+                continue
+            }
+        }
+        prev_sep = is_separator(c)
     }
 }
 
 syntax_to_color :: proc(hl: Highlight) -> int {
     #partial switch hl {
+    case .Hl_Comment: return 32
+    case .Hl_Keyword1: return 33
+    case .Hl_Keyword2: return 34
     case .Hl_Number: return 31
     case .Hl_Match: return 36
     case .Hl_String: return 35
